@@ -1,0 +1,16 @@
+# Minimal Supabase CLI config
+
+[functions.segment-chapters]
+verify_jwt = true
+
+[functions.generate-chapter-content]
+verify_jwt = true
+
+[functions.chat-with-chapter]
+verify_jwt = true
+
+[functions.name-study-units]
+verify_jwt = true
+
+[functions.segment-study-units]
+verify_jwt = true
