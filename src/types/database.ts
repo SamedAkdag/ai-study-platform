@@ -95,6 +95,10 @@ export type Database = {
           summary?: string | null
           key_concepts?: string[] | null
           explanation?: string | null
+          explanation_brief?: string | null
+          explanation_detailed?: string | null
+          generation_style?: string | null
+          page_sources?: PageSource[] | null
           examples?: ExampleItem[] | null
           quiz?: QuizItem[] | null
           page_text?: string | null

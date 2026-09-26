@@ -53,7 +53,8 @@ export default function UploadPage() {
         title: bookTitle,
         totalPages: extracted.totalPages,
       })
-      bookId = created.id
+      const currentBookId = created.id
+      bookId = currentBookId
 
       await supabase
         .from('books')
@@ -63,20 +64,20 @@ export default function UploadPage() {
           status: 'processing',
           error_message: null,
         })
-        .eq('id', bookId)
+        .eq('id', currentBookId)
 
-      navigate(`/processing/${bookId}`, { replace: true })
+      navigate(`/processing/${currentBookId}`, { replace: true })
 
       await supabase
         .from('books')
         .update({ progress_step: 'analyzing' })
-        .eq('id', bookId)
+        .eq('id', currentBookId)
 
-      // Topic-aware ~5-page units (extend/shrink at boundaries) + subtopics
+      // Topic-aware study sessions + subtopics
       await supabase
         .from('books')
         .update({ progress_step: 'segmenting' })
-        .eq('id', bookId)
+        .eq('id', currentBookId)
 
       const units = await segmentStudyUnits({
         bookTitle,
@@ -86,11 +87,11 @@ export default function UploadPage() {
       await supabase
         .from('books')
         .update({ progress_step: 'saving' })
-        .eq('id', bookId)
+        .eq('id', currentBookId)
 
-      await saveChapters(bookId, units, extracted.pages)
-      await markBookReady(bookId)
-      navigate(`/books/${bookId}`, { replace: true })
+      await saveChapters(currentBookId, units, extracted.pages)
+      await markBookReady(currentBookId)
+      navigate(`/books/${currentBookId}`, { replace: true })
     } catch (err) {
       const msg = formatError(err)
       if (bookId) await markBookFailed(bookId, msg)

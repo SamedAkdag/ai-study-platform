@@ -15,7 +15,6 @@ export function buildStudyUnitsFromPages(pages: PageText[]): MergedChapter[] {
   let i = 0
 
   while (i < pages.length) {
-    const start = pages[i]!
     let endIndex = Math.min(i + TARGET - 1, pages.length - 1)
 
     // If the target end page has almost no text, extend a bit to gather more context
@@ -30,7 +29,7 @@ export function buildStudyUnitsFromPages(pages: PageText[]): MergedChapter[] {
     const slice = pages.slice(i, endIndex + 1)
     const startPage = slice[0]!.pageNumber
     const endPage = slice[slice.length - 1]!.pageNumber
-    const title = inferTitle(slice, startPage, endPage)
+    const title = inferTitle(startPage, endPage)
     const concepts = inferKeyConcepts(slice)
 
     units.push({
@@ -48,7 +47,7 @@ export function buildStudyUnitsFromPages(pages: PageText[]): MergedChapter[] {
   return units
 }
 
-function inferTitle(pages: PageText[], startPage: number, endPage: number): string {
+function inferTitle(startPage: number, endPage: number): string {
   return `Konu çalışması (s. ${startPage}–${endPage})`
 }
 
