@@ -1,13 +1,8 @@
-// Smart study-unit boundaries: ~5 pages with topic integrity.
-// Extend if topic continues; shrink if last page starts a long spill.
-// Also returns subtopic headings for the chapter list.
-// Secrets: GROQ_API_KEY
+// Topic-coherent study sessions (~15–25 min). Page count flexible.
+// Secrets: GROQ_API_KEY (primary), GEMINI_API_KEY (fallback)
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
-
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'qwen/qwen3.8-27b'
-const MAX_RETRIES = 4
+import { llmComplete, safeParseJson } from '../_shared/llm.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -29,45 +24,15 @@ type ChapterOut = {
   subtopics: string[]
 }
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms))
-}
-
-function parseRetryMs(body: string): number {
-  const match = body.match(/try again in ([0-9.]+)\s*s/i)
-  if (match) return Math.ceil(parseFloat(match[1]) * 1000) + 500
-  return 15_000
-}
-
-function stripMarkdownJson(raw: string): string {
-  const trimmed = raw.trim()
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-  if (fenced?.[1]) return fenced[1].trim()
-  return trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-}
-
-function safeParseJson(raw: string): unknown {
-  const cleaned = stripMarkdownJson(raw)
-  try {
-    return JSON.parse(cleaned)
-  } catch {
-    const start = cleaned.indexOf('{')
-    const end = cleaned.lastIndexOf('}')
-    if (start >= 0 && end > start) {
-      return JSON.parse(cleaned.slice(start, end + 1))
-    }
-    throw new Error('AI response was not valid JSON')
-  }
-}
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   try {
-    const apiKey = Deno.env.get('GROQ_API_KEY')
-    if (!apiKey) throw new Error('GROQ_API_KEY is not set')
+    if (!Deno.env.get('GROQ_API_KEY') && !Deno.env.get('GEMINI_API_KEY')) {
+      throw new Error('Set GROQ_API_KEY and/or GEMINI_API_KEY')
+    }
 
     const body = await req.json()
     const bookTitle = (body?.book_title as string) || 'Textbook'
@@ -125,47 +90,19 @@ Page range to cover: ${rangeStart}–${rangeEnd}
 Page outlines:
 ${catalog}`
 
-    let chapters: ChapterOut[] = []
+    const { text } = await llmComplete({
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      json: true,
+      temperature: 0.2,
+      maxTokens: 1800,
+    })
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
-      const res = await fetch(GROQ_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          temperature: 0.2,
-          reasoning_effort: 'none',
-          max_tokens: 1800,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-        }),
-      })
+    const parsed = safeParseJson(text) as { chapters?: ChapterOut[] }
+    let chapters = Array.isArray(parsed.chapters) ? parsed.chapters : []
 
-      if (res.status === 429) {
-        const errBody = await res.text()
-        if (attempt === MAX_RETRIES) throw new Error(`Groq error 429: ${errBody}`)
-        await sleep(parseRetryMs(errBody))
-        continue
-      }
-
-      if (!res.ok) throw new Error(`Groq error ${res.status}: ${await res.text()}`)
-
-      const payload = await res.json()
-      const content = payload?.choices?.[0]?.message?.content
-      if (typeof content !== 'string') throw new Error('Empty Groq response')
-
-      const parsed = safeParseJson(content) as { chapters?: ChapterOut[] }
-      chapters = Array.isArray(parsed.chapters) ? parsed.chapters : []
-      break
-    }
-
-    // Soft clamp into requested range + size sanity
     chapters = chapters
       .filter(
         (c) =>

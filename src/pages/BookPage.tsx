@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { fetchBook, fetchChapters } from '@/lib/api'
+import AppShell from '@/components/AppShell'
 
 function statusLabel(status: string) {
   if (status === 'ready') return 'hazır'
@@ -30,90 +31,108 @@ export default function BookPage() {
   const progress = chapters.length ? Math.round((ready / chapters.length) * 100) : 0
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-4 py-8">
-      <header className="space-y-3">
-        <Link to="/" className="text-sm text-slate-500 hover:text-slate-800">
+    <AppShell wide>
+      <header className="mb-8 space-y-4">
+        <Link to="/" className="btn-ghost">
           ← Yeni kitap
         </Link>
-        <h1 className="text-3xl font-semibold text-slate-900">
-          {bookQuery.data?.title || '…'}
-        </h1>
-        <p className="text-sm text-slate-600">
-          {chapters.length} ünite
-          {bookQuery.data?.subject ? ` · ${bookQuery.data.subject}` : ''}
-        </p>
-        <p className="text-sm text-slate-500">
-          İçerik üniteye tıklayınca üretilir. İlerleme: {ready}/{chapters.length}{' '}
-          ünite hazır ({progress}%).
-        </p>
-        <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-          <div
-            className="h-full bg-slate-900 transition-all"
-            style={{ width: `${progress}%` }}
-          />
+        <div>
+          <p
+            className="mb-2 text-xs font-semibold tracking-[0.18em] uppercase"
+            style={{ color: 'var(--accent)' }}
+          >
+            Çalışma kitabı
+          </p>
+          <h1 className="font-display text-4xl font-semibold tracking-tight">
+            {bookQuery.data?.title || '…'}
+          </h1>
+          <p className="muted mt-2 text-sm">
+            {chapters.length} ünite
+            {bookQuery.data?.subject ? ` · ${bookQuery.data.subject}` : ''}
+            {' · '}
+            {ready}/{chapters.length} içerik hazır ({progress}%)
+          </p>
+        </div>
+        <div className="progress-track max-w-md">
+          <div className="progress-fill" style={{ width: `${progress}%` }} />
         </div>
       </header>
 
-      <div className="grid gap-6 md:grid-cols-[280px_1fr]">
-        <aside className="space-y-2">
-          {chapters.map((ch) => (
-            <Link
-              key={ch.id}
-              to={`/books/${bookId}/chapters/${ch.id}`}
-              className="block rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm hover:border-slate-400"
-            >
-              <span className="font-medium text-slate-900">
-                {ch.order_index ?? ch.chapter_number}. {ch.title}
-              </span>
-              {ch.summary && (
-                <span className="mt-1 block text-xs leading-snug text-slate-600">
-                  {ch.summary}
+      <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
+        <aside className="surface-panel h-fit p-3">
+          <p className="muted mb-2 px-2 text-xs font-semibold tracking-wide uppercase">
+            Üniteler
+          </p>
+          <nav className="space-y-1">
+            {chapters.map((ch) => (
+              <Link
+                key={ch.id}
+                to={`/books/${bookId}/chapters/${ch.id}`}
+                className="unit-link"
+              >
+                <span className="font-display block text-[0.98rem] font-semibold">
+                  {ch.order_index ?? ch.chapter_number}. {ch.title}
                 </span>
-              )}
-              {ch.key_concepts && ch.key_concepts.length > 0 && (
-                <span className="mt-1.5 block text-[11px] leading-snug text-slate-500">
-                  Konular: {ch.key_concepts.join(' · ')}
+                {ch.summary && (
+                  <span className="muted mt-1 block text-xs leading-snug">
+                    {ch.summary}
+                  </span>
+                )}
+                {ch.key_concepts && ch.key_concepts.length > 0 && (
+                  <span
+                    className="mt-1.5 block text-[11px] leading-snug"
+                    style={{ color: 'var(--accent-deep)' }}
+                  >
+                    {ch.key_concepts.join(' · ')}
+                  </span>
+                )}
+                <span className="muted mt-1 block text-[11px]">
+                  s. {ch.start_page}–{ch.end_page} · {statusLabel(ch.status)}
                 </span>
-              )}
-              <span className="mt-1 block text-xs text-slate-400">
-                s. {ch.start_page}–{ch.end_page} · {statusLabel(ch.status)}
-              </span>
-            </Link>
-          ))}
+              </Link>
+            ))}
+          </nav>
         </aside>
 
-        <main className="rounded-2xl border border-slate-200 bg-white p-6">
-          <h2 className="text-lg font-semibold">Çalışma üniteleri</h2>
-          <p className="mt-2 text-sm text-slate-600">
-            Her ünite bir konu başlığı ve kısa açıklama içerir. Açınca anlatım,
-            örnekler ve quiz üretilebilir.
+        <main className="surface-panel p-6 sm:p-8">
+          <h2 className="font-display text-2xl font-semibold tracking-tight">
+            Çalışma üniteleri
+          </h2>
+          <p className="muted mt-2 max-w-2xl text-sm leading-relaxed">
+            Her ünite bir konu başlığı ve kısa açıklama içerir. Açınca anlatım
+            stili seçip 3 seviyeli içerik üretebilirsin.
           </p>
-          <ul className="mt-6 space-y-3">
+
+          <ul className="mt-7 space-y-3">
             {chapters.map((ch) => (
               <li
                 key={ch.id}
-                className="flex items-start justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3"
+                className="flex flex-col gap-3 rounded-2xl border px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+                style={{
+                  borderColor: 'var(--line)',
+                  background: 'rgba(255,255,255,0.55)',
+                }}
               >
                 <div className="min-w-0">
-                  <p className="font-medium text-slate-900">
+                  <p className="font-display text-lg font-semibold">
                     {ch.order_index ?? ch.chapter_number}. {ch.title}
                   </p>
                   {ch.summary && (
-                    <p className="mt-1 text-sm text-slate-600">{ch.summary}</p>
+                    <p className="muted mt-1 text-sm">{ch.summary}</p>
                   )}
                   {ch.key_concepts && ch.key_concepts.length > 0 && (
-                    <p className="mt-1.5 text-xs text-slate-500">
-                      <span className="font-medium text-slate-600">Konular: </span>
+                    <p className="mt-2 text-xs" style={{ color: 'var(--accent-deep)' }}>
+                      <span className="font-semibold">Konular: </span>
                       {ch.key_concepts.join(' · ')}
                     </p>
                   )}
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="muted mt-1 text-xs">
                     s. {ch.start_page}–{ch.end_page} · {statusLabel(ch.status)}
                   </p>
                 </div>
                 <Link
                   to={`/books/${bookId}/chapters/${ch.id}`}
-                  className="shrink-0 rounded-lg bg-slate-900 px-3 py-1.5 text-sm text-white"
+                  className="btn-primary shrink-0 self-start sm:self-center"
                 >
                   Aç
                 </Link>
@@ -122,6 +141,6 @@ export default function BookPage() {
           </ul>
         </main>
       </div>
-    </div>
+    </AppShell>
   )
 }

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchChapter, generateSingleChapterContent } from '@/lib/api'
 import ExplanationWithInlineChat from '@/components/ExplanationWithInlineChat'
+import AppShell from '@/components/AppShell'
 import {
   findRelatedPassages,
   parsePageTextToSources,
@@ -95,41 +96,56 @@ export default function ChapterPage() {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 px-4 py-8">
-      <div>
-        <Link
-          to={`/books/${bookId}`}
-          className="text-sm text-slate-500 hover:text-slate-800"
-        >
+    <AppShell>
+      <header className="mb-7 space-y-3">
+        <Link to={`/books/${bookId}`} className="btn-ghost">
           ← Kitaba dön
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold text-slate-900">
-          {ch?.title || '…'}
-        </h1>
-        {ch && (
-          <p className="text-sm text-slate-500">
-            s. {ch.start_page}–{ch.end_page} · {ch.status}
-            {pageSources.length > 0 ? ` · ${pageSources.length} sayfa kaynağı` : ''}
+        <div>
+          <p
+            className="mb-2 text-xs font-semibold tracking-[0.18em] uppercase"
+            style={{ color: 'var(--accent)' }}
+          >
+            Çalışma ünitesi
           </p>
-        )}
-        {ch?.summary && (
-          <p className="mt-2 text-sm text-slate-600">{ch.summary}</p>
-        )}
-        {ch?.key_concepts && ch.key_concepts.length > 0 && (
-          <p className="mt-1 text-xs text-slate-500">
-            Konular: {ch.key_concepts.join(' · ')}
-          </p>
-        )}
-      </div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+            {ch?.title || '…'}
+          </h1>
+          {ch && (
+            <p className="muted mt-2 text-sm">
+              s. {ch.start_page}–{ch.end_page} · {ch.status}
+              {pageSources.length > 0
+                ? ` · ${pageSources.length} sayfa kaynağı`
+                : ''}
+            </p>
+          )}
+          {ch?.summary && (
+            <p className="muted mt-3 max-w-2xl text-sm leading-relaxed">
+              {ch.summary}
+            </p>
+          )}
+          {ch?.key_concepts && ch.key_concepts.length > 0 && (
+            <p className="mt-2 text-xs" style={{ color: 'var(--accent-deep)' }}>
+              <span className="font-semibold">Konular: </span>
+              {ch.key_concepts.join(' · ')}
+            </p>
+          )}
+        </div>
+      </header>
 
       {needsContent && ch?.status !== 'generating' && !generateMutation.isPending && (
-        <div className="space-y-4 rounded-2xl border border-dashed border-slate-300 bg-white p-6">
-          <p className="text-center text-slate-700">
-            Bu ünite için çalışma materyali henüz yok. Tüm sayfalar kaynaktan
-            okunarak 3 seviyeli anlatım üretilecek.
-          </p>
+        <div className="surface-panel space-y-5 border-dashed p-6 sm:p-8">
+          <div className="text-center">
+            <p className="font-display text-xl font-semibold">
+              Materyal henüz hazır değil
+            </p>
+            <p className="muted mx-auto mt-2 max-w-md text-sm leading-relaxed">
+              Sayfalar kaynaktan okunarak 3 seviyeli anlatım, örnekler ve quiz
+              üretilecek.
+            </p>
+          </div>
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-600">
+            <span className="muted mb-1.5 block font-medium">
               Anlatım tercihin (opsiyonel)
             </span>
             <textarea
@@ -137,35 +153,33 @@ export default function ChapterPage() {
               onChange={(e) => setStylePref(e.target.value)}
               rows={2}
               placeholder="Örn. gerçek dünya örnekleriyle, basit dilde, sınav odaklı…"
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+              className="field"
             />
           </label>
           <div className="text-center">
             <button
               type="button"
               onClick={() => generateMutation.mutate()}
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white"
+              className="btn-primary"
             >
               Bu ünite için içerik üret
             </button>
           </div>
-          {genError && (
-            <p className="text-center text-sm text-red-600">{genError}</p>
-          )}
+          {genError && <div className="alert-error text-center">{genError}</div>}
         </div>
       )}
 
       {(ch?.status === 'generating' || generateMutation.isPending) && (
-        <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-700">
+        <div className="alert-info">
           İçerik üretiliyor… Her sayfa kapsanmaya çalışılıyor (özet + genel +
           detay).
         </div>
       )}
 
       {ch?.status === 'ready' && ch.explanation && (
-        <>
+        <div className="space-y-5">
           {ch.generation_style && (
-            <p className="text-xs text-slate-500">
+            <p className="muted text-xs">
               Anlatım stili: {ch.generation_style}
             </p>
           )}
@@ -176,30 +190,24 @@ export default function ChapterPage() {
                 key={t.id}
                 type="button"
                 onClick={() => setTab(t.id)}
-                className={`rounded-full px-4 py-1.5 text-sm ${
-                  tab === t.id
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
+                className={`chip ${tab === t.id ? 'chip-active' : 'chip-idle'}`}
               >
                 {t.label}
               </button>
             ))}
           </div>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-6">
+          <section className="surface-panel p-5 sm:p-7">
             {tab === 'explanation' && (
-              <div className="space-y-4">
+              <div className="space-y-5">
                 <div className="flex flex-wrap gap-2">
                   {depths.map((d) => (
                     <button
                       key={d.id}
                       type="button"
                       onClick={() => setDepth(d.id)}
-                      className={`rounded-lg px-3 py-1.5 text-xs ${
-                        depth === d.id
-                          ? 'bg-slate-800 text-white'
-                          : 'bg-slate-100 text-slate-700'
+                      className={`chip ${
+                        depth === d.id ? 'chip-active' : 'chip-idle'
                       }`}
                     >
                       {d.label}
@@ -209,7 +217,7 @@ export default function ChapterPage() {
                 </div>
 
                 {!markdownForDepth ? (
-                  <p className="text-sm text-slate-500">
+                  <p className="muted text-sm">
                     Bu seviye henüz yok. Yeniden içerik üretebilirsin.
                   </p>
                 ) : (
@@ -222,14 +230,23 @@ export default function ChapterPage() {
                 )}
 
                 {bookHits.length > 0 && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-                    <p className="text-xs font-medium text-amber-900">
+                  <div
+                    className="rounded-xl border px-4 py-3"
+                    style={{
+                      borderColor: 'rgba(154, 123, 79, 0.35)',
+                      background: 'rgba(154, 123, 79, 0.1)',
+                    }}
+                  >
+                    <p
+                      className="text-xs font-semibold"
+                      style={{ color: 'var(--gold)' }}
+                    >
                       Seçimin kitapta olabilecek yerleri
                     </p>
                     <ul className="mt-2 space-y-2">
                       {bookHits.map((h, i) => (
-                        <li key={i} className="text-xs text-amber-950">
-                          <span className="font-medium">s. {h.page}</span>
+                        <li key={i} className="text-xs" style={{ color: 'var(--ink)' }}>
+                          <span className="font-semibold">s. {h.page}</span>
                           <p className="mt-0.5 whitespace-pre-wrap opacity-90">
                             …{h.excerpt}…
                           </p>
@@ -256,18 +273,29 @@ export default function ChapterPage() {
             )}
           </section>
 
-          {ch.status === 'ready' && (
+          <div className="space-y-3">
+            <label className="block text-sm">
+              <span className="muted mb-1.5 block font-medium">
+                Stili değiştirip yeniden üret
+              </span>
+              <textarea
+                value={stylePref}
+                onChange={(e) => setStylePref(e.target.value)}
+                rows={2}
+                className="field"
+              />
+            </label>
             <button
               type="button"
               onClick={() => generateMutation.mutate()}
-              className="text-xs text-slate-500 underline"
+              className="btn-ghost"
             >
-              Stili değiştirip yeniden üret
+              Yeniden üret
             </button>
-          )}
-        </>
+          </div>
+        </div>
       )}
-    </div>
+    </AppShell>
   )
 }
 
@@ -282,9 +310,7 @@ function SourcesPanel({
 }) {
   if (!sources.length) {
     return (
-      <p className="text-sm text-slate-500">
-        Bu ünite için saklanmış PDF metni yok.
-      </p>
+      <p className="muted text-sm">Bu ünite için saklanmış PDF metni yok.</p>
     )
   }
 
@@ -292,37 +318,37 @@ function SourcesPanel({
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-slate-600">
+      <p className="muted text-sm leading-relaxed">
         Bunlar kitabından çıkan ham sayfa kesitleri — AI özeti değil. Böylece
         içerik kaybı korkusu azalır; her sayfa burada durur.
       </p>
       {highlight.length > 0 && (
-        <button
-          type="button"
-          onClick={onClearHighlight}
-          className="text-xs text-slate-500 underline"
-        >
+        <button type="button" onClick={onClearHighlight} className="btn-ghost">
           Seçim vurgusunu temizle
         </button>
       )}
       {sources.map((s) => (
         <article
           key={s.page}
-          className={`rounded-xl border px-4 py-3 ${
-            highlightPages.has(s.page)
-              ? 'border-amber-300 bg-amber-50'
-              : 'border-slate-200 bg-slate-50'
-          }`}
+          className="rounded-xl border px-4 py-3"
+          style={{
+            borderColor: highlightPages.has(s.page)
+              ? 'rgba(154, 123, 79, 0.4)'
+              : 'var(--line)',
+            background: highlightPages.has(s.page)
+              ? 'rgba(154, 123, 79, 0.1)'
+              : 'rgba(255,255,255,0.55)',
+          }}
         >
           <header className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="text-sm font-semibold text-slate-900">
+            <h3 className="font-display text-sm font-semibold">
               Sayfa {s.page}
             </h3>
             {s.topics?.length > 0 && (
-              <p className="text-xs text-slate-500">{s.topics.join(' · ')}</p>
+              <p className="muted text-xs">{s.topics.join(' · ')}</p>
             )}
           </header>
-          <p className="whitespace-pre-wrap text-xs leading-relaxed text-slate-700">
+          <p className="whitespace-pre-wrap text-xs leading-relaxed" style={{ color: 'var(--ink-muted)' }}>
             {s.excerpt || '(bu sayfada çıkarılabilir metin yok)'}
           </p>
         </article>
@@ -337,17 +363,17 @@ function ExamplesPanel({
   examples: Array<{ problem: string; solution_steps: string[] }>
 }) {
   if (!examples.length) {
-    return <p className="text-slate-500">Henüz örnek yok.</p>
+    return <p className="muted">Henüz örnek yok.</p>
   }
 
   return (
     <ol className="space-y-6">
       {examples.map((ex, i) => (
         <li key={i} className="space-y-2">
-          <p className="font-medium text-slate-900">
+          <p className="font-display text-lg font-semibold">
             Örnek {i + 1}: {ex.problem}
           </p>
-          <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-700">
+          <ol className="list-decimal space-y-1 pl-5 text-sm" style={{ color: 'var(--ink-muted)' }}>
             {(ex.solution_steps ?? []).map((s, j) => (
               <li key={j}>{s}</li>
             ))}
@@ -372,31 +398,41 @@ function QuizPanel({ quiz }: { quiz: QuizItem[] }) {
   }, [answers, quiz, submitted])
 
   if (!quiz.length) {
-    return <p className="text-slate-500">Henüz quiz yok.</p>
+    return <p className="muted">Henüz quiz yok.</p>
   }
 
   return (
     <div className="space-y-6">
       {quiz.map((q, i) => (
         <div key={i} className="space-y-2">
-          <p className="font-medium text-slate-900">
+          <p className="font-display font-semibold">
             {i + 1}. {q.question}
           </p>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {q.options.map((opt, oi) => {
               const selected = answers[i] === oi
-              let cls = 'border-slate-200'
+              let border = 'var(--line)'
+              let bg = 'rgba(255,255,255,0.55)'
               if (submitted) {
-                if (oi === q.correct_index) cls = 'border-emerald-500 bg-emerald-50'
-                else if (selected) cls = 'border-red-400 bg-red-50'
-              } else if (selected) cls = 'border-slate-900'
+                if (oi === q.correct_index) {
+                  border = 'rgba(13, 92, 86, 0.45)'
+                  bg = 'var(--accent-soft)'
+                } else if (selected) {
+                  border = 'rgba(155, 44, 44, 0.4)'
+                  bg = 'var(--danger-soft)'
+                }
+              } else if (selected) {
+                border = 'var(--ink)'
+                bg = 'rgba(16, 32, 51, 0.04)'
+              }
               return (
                 <button
                   key={oi}
                   type="button"
                   disabled={submitted}
                   onClick={() => setAnswers((a) => ({ ...a, [i]: oi }))}
-                  className={`block w-full rounded-xl border px-3 py-2 text-left text-sm ${cls}`}
+                  className="block w-full rounded-xl border px-3 py-2.5 text-left text-sm transition"
+                  style={{ borderColor: border, background: bg }}
                 >
                   {opt}
                 </button>
@@ -404,7 +440,7 @@ function QuizPanel({ quiz }: { quiz: QuizItem[] }) {
             })}
           </div>
           {submitted && (
-            <p className="text-xs text-slate-600">{q.explanation}</p>
+            <p className="muted text-xs">{q.explanation}</p>
           )}
         </div>
       ))}
@@ -413,12 +449,12 @@ function QuizPanel({ quiz }: { quiz: QuizItem[] }) {
         <button
           type="button"
           onClick={() => setSubmitted(true)}
-          className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white"
+          className="btn-primary"
         >
           Kontrol et
         </button>
       ) : (
-        <p className="font-medium text-slate-900">
+        <p className="font-display text-lg font-semibold">
           Skor: {score?.ok}/{score?.total}
         </p>
       )}

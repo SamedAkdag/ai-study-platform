@@ -190,7 +190,7 @@ export default function ExplanationWithInlineChat({
 
   return (
     <div ref={wrapRef} className="relative">
-      <p className="mb-3 text-xs text-slate-500">
+      <p className="muted mb-4 text-xs leading-relaxed">
         Metni seç → soru sor veya kitaptaki ilgili kesiti aç. AI yalnızca seçim +
         önceki ~10 satırı kullanır.
       </p>
@@ -198,7 +198,7 @@ export default function ExplanationWithInlineChat({
       <article
         ref={articleRef}
         onMouseUp={onMouseUp}
-        className="prose prose-slate max-w-none select-text text-slate-800"
+        className="prose max-w-none select-text"
       >
         <ReactMarkdown>{markdown}</ReactMarkdown>
       </article>
@@ -206,13 +206,9 @@ export default function ExplanationWithInlineChat({
       {askBtn && (
         <div
           style={{ top: askBtn.top, left: askBtn.left }}
-          className="absolute z-30 flex flex-wrap gap-1"
+          className="absolute z-30 flex flex-wrap gap-1.5"
         >
-          <button
-            type="button"
-            onClick={openBubble}
-            className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-medium text-white shadow-lg"
-          >
+          <button type="button" onClick={openBubble} className="btn-primary !px-3 !py-1.5 text-xs">
             Bu kısım hakkında sor
           </button>
           {onShowInBook && (
@@ -223,7 +219,7 @@ export default function ExplanationWithInlineChat({
                 setAskBtn(null)
                 window.getSelection()?.removeAllRanges()
               }}
-              className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 shadow-lg"
+              className="btn-ghost !bg-white text-xs shadow-sm"
             >
               Kitapta göster
             </button>
@@ -235,10 +231,10 @@ export default function ExplanationWithInlineChat({
         <div
           key={b.id}
           style={{ top: b.top, left: b.left, width: 340 }}
-          className="absolute z-40 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl"
+          className="surface-panel absolute z-40 p-3.5"
         >
           <div className="mb-2 flex items-start justify-between gap-2">
-            <p className="line-clamp-2 text-xs text-slate-500">
+            <p className="muted line-clamp-2 text-xs">
               Seçim: “{b.selectedText}”
             </p>
             <button
@@ -246,7 +242,7 @@ export default function ExplanationWithInlineChat({
               onClick={() =>
                 setBubbles((prev) => prev.filter((x) => x.id !== b.id))
               }
-              className="text-xs text-slate-400 hover:text-slate-700"
+              className="muted text-xs hover:opacity-80"
             >
               Kapat
             </button>
@@ -254,26 +250,30 @@ export default function ExplanationWithInlineChat({
 
           <div className="mb-2 max-h-48 space-y-2 overflow-y-auto text-sm">
             {b.messages.length === 0 && (
-              <p className="text-xs text-slate-400">
-                Bu seçimle ilgili sorunu yaz.
-              </p>
+              <p className="muted text-xs">Bu seçimle ilgili sorunu yaz.</p>
             )}
             {b.messages.map((m, i) => (
               <div
                 key={i}
-                className={`rounded-lg px-2 py-1.5 text-xs whitespace-pre-wrap ${
+                className="rounded-lg px-2.5 py-1.5 text-xs whitespace-pre-wrap"
+                style={
                   m.role === 'user'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-100 text-slate-800'
-                }`}
+                    ? { background: 'var(--ink)', color: '#f5f8fb' }
+                    : {
+                        background: 'var(--accent-soft)',
+                        color: 'var(--accent-deep)',
+                      }
+                }
               >
                 {m.content}
               </div>
             ))}
-            {b.loading && (
-              <p className="text-xs text-slate-500">AI yanıtlıyor…</p>
+            {b.loading && <p className="muted text-xs">AI yanıtlıyor…</p>}
+            {b.error && (
+              <p className="text-xs" style={{ color: 'var(--danger)' }}>
+                {b.error}
+              </p>
             )}
-            {b.error && <p className="text-xs text-red-600">{b.error}</p>}
           </div>
 
           <div className="flex gap-2">
@@ -290,13 +290,13 @@ export default function ExplanationWithInlineChat({
                 if (e.key === 'Enter') void sendMessage(b.id)
               }}
               placeholder="Sorunu yaz…"
-              className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs outline-none focus:border-slate-400"
+              className="field !py-1.5 text-xs"
             />
             <button
               type="button"
               disabled={b.loading || !b.draft.trim()}
               onClick={() => void sendMessage(b.id)}
-              className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs text-white disabled:opacity-40"
+              className="btn-primary !px-2.5 !py-1.5 text-xs"
             >
               Gönder
             </button>

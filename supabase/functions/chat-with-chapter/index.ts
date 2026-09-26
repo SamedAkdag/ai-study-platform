@@ -1,27 +1,13 @@
-// Selection-scoped tutor chat for a chapter explanation passage.
-// Uses selected text + ~10 preceding lines only — does not use the rest of the book.
-// Secrets: GROQ_API_KEY
+// Selection-scoped tutor chat.
+// Secrets: GROQ_API_KEY (primary), GEMINI_API_KEY (fallback)
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
-
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'qwen/qwen3.8-27b'
-const MAX_RETRIES = 4
+import { llmComplete } from '../_shared/llm.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers':
     'authorization, x-client-info, apikey, content-type',
-}
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms))
-}
-
-function parseRetryMs(body: string): number {
-  const match = body.match(/try again in ([0-9.]+)\s*s/i)
-  if (match) return Math.ceil(parseFloat(match[1]) * 1000) + 500
-  return 15_000
 }
 
 type HistoryItem = { role: 'user' | 'assistant'; content: string }
@@ -32,8 +18,9 @@ serve(async (req) => {
   }
 
   try {
-    const apiKey = Deno.env.get('GROQ_API_KEY')
-    if (!apiKey) throw new Error('GROQ_API_KEY is not set')
+    if (!Deno.env.get('GROQ_API_KEY') && !Deno.env.get('GEMINI_API_KEY')) {
+      throw new Error('Set GROQ_API_KEY and/or GEMINI_API_KEY')
+    }
 
     const body = await req.json()
     const chapterTitle = (body?.chapter_title as string) || 'this unit'
@@ -65,52 +52,25 @@ SELECTED PASSAGE:
 ${selectedText}`
 
     const messages = [
-      { role: 'system', content: system },
+      { role: 'system' as const, content: system },
       {
-        role: 'user',
+        role: 'user' as const,
         content: `${contextBlock}\n\n(Remember: stay inside this passage only.)`,
       },
       ...history.slice(-8).map((h) => ({
-        role: h.role,
+        role: h.role as 'user' | 'assistant',
         content: h.content,
       })),
-      { role: 'user', content: question },
+      { role: 'user' as const, content: question },
     ]
 
-    let answer = ''
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
-      const res = await fetch(GROQ_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          temperature: 0.3,
-          reasoning_effort: 'none',
-          max_tokens: 700,
-          messages,
-        }),
-      })
+    const { text: answer, provider } = await llmComplete({
+      messages,
+      temperature: 0.3,
+      maxTokens: 700,
+    })
 
-      if (res.status === 429) {
-        const errBody = await res.text()
-        if (attempt === MAX_RETRIES) throw new Error(`Groq error 429: ${errBody}`)
-        await sleep(parseRetryMs(errBody))
-        continue
-      }
-
-      if (!res.ok) throw new Error(`Groq error ${res.status}: ${await res.text()}`)
-
-      const payload = await res.json()
-      const content = payload?.choices?.[0]?.message?.content
-      if (typeof content !== 'string') throw new Error('Empty Groq response')
-      answer = content
-      break
-    }
-
-    return new Response(JSON.stringify({ answer }), {
+    return new Response(JSON.stringify({ answer, provider }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (err) {
