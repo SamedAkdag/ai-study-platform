@@ -131,7 +131,7 @@ export default function UploadPage() {
   }
 
   return (
-    <AppShell>
+    <AppShell autoTour>
       <section className="mx-auto max-w-2xl space-y-9">
         <header className="fade-up space-y-3 text-center">
           <p className="section-label">Studium</p>

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import StudyTimerBadge from '@/components/StudyTimerBadge'
 import AuthButton from '@/components/AuthButton'
 import NotificationBell from '@/components/NotificationBell'
+import ProductTour from '@/components/ProductTour'
 import { useAuth } from '@/lib/auth'
 
 type Props = {
@@ -11,6 +12,8 @@ type Props = {
   wide?: boolean
   bookId?: string | null
   showBookTimer?: boolean
+  /** First-visit product tour (home). */
+  autoTour?: boolean
 }
 
 export default function AppShell({
@@ -18,9 +21,11 @@ export default function AppShell({
   wide,
   bookId,
   showBookTimer,
+  autoTour = false,
 }: Props) {
   const { user, profile } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [tourOpen, setTourOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -45,6 +50,13 @@ export default function AppShell({
         <nav className="flex flex-wrap items-center gap-0.5">
           <StudyTimerBadge bookId={bookId} showBook={showBookTimer} />
           <NotificationBell />
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            onClick={() => setTourOpen(true)}
+          >
+            Tur
+          </button>
           {user && (
             <div className="relative" ref={menuRef}>
               <button
@@ -85,6 +97,11 @@ export default function AppShell({
         </nav>
       </header>
       {children}
+      {tourOpen ? (
+        <ProductTour open onClose={() => setTourOpen(false)} />
+      ) : autoTour ? (
+        <ProductTour auto />
+      ) : null}
     </div>
   )
 }
