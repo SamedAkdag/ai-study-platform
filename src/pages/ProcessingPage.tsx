@@ -57,8 +57,9 @@ export default function ProcessingPage() {
             {bookQuery.data?.title || 'Kitabın işleniyor…'}
           </h1>
           <p className="muted mt-3 text-sm leading-relaxed">
-            MiMo (Token Harbor) konu ünitelerini ayırır. Hata olursa yerel yedek
-            yok — gerçek API mesajı burada görünür.
+            MiMo üniteleri ayırırken <strong>bu sekmeyi açık tut</strong>.
+            Kapanırsa işlem yarıda kalabilir; sonra kitaptan kaldığın yerden
+            devam edebilirsin. Hata olursa gerçek mesaj aşağıda görünür.
           </p>
         </header>
 

@@ -1,16 +1,27 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchChapter, generateSingleChapterContent } from '@/lib/api'
+import { fetchBook, fetchChapter, generateSingleChapterContent } from '@/lib/api'
 import ExplanationWithInlineChat from '@/components/ExplanationWithInlineChat'
 import AppShell from '@/components/AppShell'
 import QuizPlayer from '@/components/QuizPlayer'
+import ContributionComposer from '@/components/ContributionComposer'
+import ContributionReviewPanel from '@/components/ContributionReviewPanel'
+import GroupChatPanel from '@/components/GroupChatPanel'
 import {
   findRelatedPassages,
   parsePageTextToSources,
   type PageSource,
 } from '@/lib/sourceLookup'
 import { useStudySession } from '@/hooks/useStudySession'
+import { friendlyAiError, isRetryableAiError } from '@/lib/errors'
+import { markChapterOpened, markChapterQuiz } from '@/lib/studyProgress'
+import { postGroupMessage } from '@/lib/groupChat'
+import {
+  fetchMyMembership,
+  fetchStudyGroupByBook,
+  roleAtLeast,
+} from '@/lib/studyGroup'
 
 type Tab = 'explanation' | 'examples' | 'quiz' | 'sources'
 type Depth = 'brief' | 'standard' | 'detailed'
@@ -27,6 +38,7 @@ export default function ChapterPage() {
   const [bookHits, setBookHits] = useState<
     Array<{ page: number; excerpt: string; score: number }>
   >([])
+  const autoRetryRef = useRef(0)
   const queryClient = useQueryClient()
 
   const chapterQuery = useQuery({
@@ -34,6 +46,28 @@ export default function ChapterPage() {
     queryFn: () => fetchChapter(chapterId!),
     enabled: !!chapterId,
   })
+
+  const bookQuery = useQuery({
+    queryKey: ['book', bookId],
+    queryFn: () => fetchBook(bookId!),
+    enabled: !!bookId,
+  })
+
+  const groupQuery = useQuery({
+    queryKey: ['study-group-by-book', bookId],
+    queryFn: () => fetchStudyGroupByBook(bookId!),
+    enabled: !!bookId,
+  })
+
+  const membershipQuery = useQuery({
+    queryKey: ['group-me', groupQuery.data?.id],
+    queryFn: () => fetchMyMembership(groupQuery.data!.id),
+    enabled: !!groupQuery.data?.id,
+  })
+
+  useEffect(() => {
+    if (bookId && chapterId) markChapterOpened(bookId, chapterId)
+  }, [bookId, chapterId])
 
   const generateMutation = useMutation({
     mutationFn: () =>
@@ -44,16 +78,27 @@ export default function ChapterPage() {
       }),
     onSuccess: async () => {
       setGenError(null)
+      autoRetryRef.current = 0
       await queryClient.invalidateQueries({ queryKey: ['chapter', chapterId] })
       await queryClient.invalidateQueries({ queryKey: ['chapters', bookId] })
     },
     onError: (err) => {
-      setGenError(err instanceof Error ? err.message : 'Üretim başarısız')
+      setGenError(friendlyAiError(err))
       void queryClient.invalidateQueries({ queryKey: ['chapter', chapterId] })
+      if (isRetryableAiError(err) && autoRetryRef.current < 1) {
+        autoRetryRef.current += 1
+        window.setTimeout(() => generateMutation.mutate(), 1400)
+      }
     },
   })
 
   const ch = chapterQuery.data
+  const membership = membershipQuery.data
+  const canWrite = roleAtLeast(membership?.role, 'write')
+
+  function refreshChapter() {
+    void queryClient.invalidateQueries({ queryKey: ['chapter', chapterId] })
+  }
 
   const pageSources: PageSource[] = useMemo(() => {
     if (ch?.page_sources && Array.isArray(ch.page_sources) && ch.page_sources.length) {
@@ -154,7 +199,22 @@ export default function ChapterPage() {
               Üret
             </button>
           </div>
-          {genError && <div className="alert-error text-center">{genError}</div>}
+          {genError && (
+            <div className="space-y-2 text-center">
+              <div className="alert-error">{genError}</div>
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => {
+                  autoRetryRef.current = 0
+                  setGenError(null)
+                  generateMutation.mutate()
+                }}
+              >
+                Tekrar dene
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -257,7 +317,30 @@ export default function ChapterPage() {
               <ExamplesPanel examples={ch.examples ?? []} />
             )}
 
-            {tab === 'quiz' && <QuizPlayer quiz={ch.quiz ?? []} />}
+            {tab === 'quiz' && (
+              <QuizPlayer
+                quiz={ch.quiz ?? []}
+                bookTitle={bookQuery.data?.title}
+                chapterTitle={ch.title}
+                onScored={(ok, total) => {
+                  if (bookId && chapterId) {
+                    markChapterQuiz(bookId, chapterId, ok, total)
+                  }
+                }}
+                onShareScore={
+                  membership && groupQuery.data
+                    ? async (ok, total) => {
+                        await postGroupMessage({
+                          groupId: groupQuery.data!.id,
+                          chapterId: ch.id,
+                          member: membership,
+                          body: `Quiz skoru: ${ok}/${total} — “${ch.title}”`,
+                        })
+                      }
+                    : undefined
+                }
+              />
+            )}
 
             {tab === 'sources' && (
               <SourcesPanel
@@ -282,12 +365,43 @@ export default function ChapterPage() {
             </label>
             <button
               type="button"
-              onClick={() => generateMutation.mutate()}
+              onClick={() => {
+                autoRetryRef.current = 0
+                generateMutation.mutate()
+              }}
               className="btn-ghost"
             >
               Yeniden üret
             </button>
           </div>
+        </div>
+      )}
+
+      {(canWrite || membership) && groupQuery.data && ch && (
+        <div className="mt-6 space-y-4">
+          {membership && canWrite && (
+            <ContributionComposer
+              groupId={groupQuery.data.id}
+              chapterId={ch.id}
+              chapterTitle={ch.title}
+              membership={membership}
+              contextExcerpt={(ch.explanation || '').slice(0, 1200)}
+              onApplied={refreshChapter}
+            />
+          )}
+          {membership && (
+            <ContributionReviewPanel
+              chapterId={ch.id}
+              membership={membership}
+              onApplied={refreshChapter}
+            />
+          )}
+          <GroupChatPanel
+            groupId={groupQuery.data.id}
+            chapterId={ch.id}
+            membership={membership ?? null}
+            title="Ünite sohbeti"
+          />
         </div>
       )}
     </AppShell>

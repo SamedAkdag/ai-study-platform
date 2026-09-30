@@ -60,6 +60,36 @@ export function rememberLibraryBook(input: {
   writeLocal(entries)
 }
 
+/** Remove a remembered shared/group pin from the local shelf. */
+export function forgetLibraryBook(bookId: string) {
+  writeLocal(readLocal().filter((e) => e.bookId !== bookId))
+}
+
+/** Hidden book ids (local) — soft-remove from shelf without deleting server data. */
+const HIDDEN_KEY = 'studium_library_hidden_v1'
+
+export function getHiddenLibraryIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(HIDDEN_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw) as string[]
+    return new Set(Array.isArray(arr) ? arr : [])
+  } catch {
+    return new Set()
+  }
+}
+
+export function hideLibraryBook(bookId: string) {
+  const set = getHiddenLibraryIds()
+  set.add(bookId)
+  try {
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify([...set]))
+  } catch {
+    /* ignore */
+  }
+  forgetLibraryBook(bookId)
+}
+
 export function libraryHref(item: {
   bookId: string
   shareToken: string | null
@@ -239,8 +269,9 @@ export async function fetchMyLibrary(userId?: string | null): Promise<LibraryIte
   }
 
   // 5) Local remembered entries (fallback)
+  const hidden = getHiddenLibraryIds()
   for (const e of readLocal()) {
-    if (byId.has(e.bookId)) continue
+    if (byId.has(e.bookId) || hidden.has(e.bookId)) continue
     byId.set(e.bookId, {
       bookId: e.bookId,
       title: e.title,
@@ -259,7 +290,7 @@ export async function fetchMyLibrary(userId?: string | null): Promise<LibraryIte
     })
   }
 
-  return [...byId.values()].sort((a, b) =>
-    b.addedAt.localeCompare(a.addedAt),
-  )
+  return [...byId.values()]
+    .filter((item) => !hidden.has(item.bookId) || item.source === 'mine')
+    .sort((a, b) => b.addedAt.localeCompare(a.addedAt))
 }

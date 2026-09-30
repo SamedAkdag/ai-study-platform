@@ -370,16 +370,30 @@ export async function disableBookShare(bookId: string) {
 }
 
 export async function fetchPublicBook(token: string) {
-  const { data, error } = await supabase
+  const primary = await supabase
     .from('public_shared_books')
     .select(
       'id, title, subject, share_token, created_at, is_public, view_count, share_count',
     )
     .eq('share_token', token)
     .maybeSingle()
-  if (error) throw error
-  if (!data) throw new Error('Paylaşım bulunamadı')
-  return data
+
+  if (!primary.error && primary.data) return primary.data
+
+  // Older view without stats columns
+  const fallback = await supabase
+    .from('public_shared_books')
+    .select('id, title, subject, share_token, created_at')
+    .eq('share_token', token)
+    .maybeSingle()
+  if (fallback.error) throw fallback.error
+  if (!fallback.data) throw new Error('Paylaşım bulunamadı')
+  return {
+    ...fallback.data,
+    is_public: true,
+    view_count: 0,
+    share_count: 0,
+  }
 }
 
 /** Count a public-book open once per browser tab session. */

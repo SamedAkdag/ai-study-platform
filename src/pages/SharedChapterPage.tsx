@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchPublicBook, fetchPublicChapter } from '@/lib/api'
@@ -11,6 +11,8 @@ import MarkdownWithTts from '@/components/MarkdownWithTts'
 import QuizPlayer from '@/components/QuizPlayer'
 import ShareStats from '@/components/ShareStats'
 import { useStudySession } from '@/hooks/useStudySession'
+import { postGroupMessage } from '@/lib/groupChat'
+import { markChapterOpened, markChapterQuiz } from '@/lib/studyProgress'
 import {
   fetchMyMembership,
   fetchStudyGroupByBook,
@@ -35,6 +37,12 @@ export default function SharedChapterPage() {
   })
 
   useStudySession(bookQuery.data?.id, chapterId)
+
+  useEffect(() => {
+    if (bookQuery.data?.id && chapterId) {
+      markChapterOpened(bookQuery.data.id, chapterId)
+    }
+  }, [bookQuery.data?.id, chapterId])
 
   const chapterQuery = useQuery({
     queryKey: ['public-chapter', chapterId, bookQuery.data?.id],
@@ -216,7 +224,30 @@ export default function SharedChapterPage() {
           </div>
         )}
 
-        {tab === 'quiz' && <QuizPlayer quiz={ch.quiz ?? []} />}
+        {tab === 'quiz' && (
+          <QuizPlayer
+            quiz={ch.quiz ?? []}
+            bookTitle={bookQuery.data.title}
+            chapterTitle={ch.title}
+            onScored={(ok, total) => {
+              if (bookQuery.data?.id) {
+                markChapterQuiz(bookQuery.data.id, ch.id, ok, total)
+              }
+            }}
+            onShareScore={
+              membership && groupQuery.data
+                ? async (ok, total) => {
+                    await postGroupMessage({
+                      groupId: groupQuery.data!.id,
+                      chapterId: ch.id,
+                      member: membership,
+                      body: `Quiz skoru: ${ok}/${total} — “${ch.title}”`,
+                    })
+                  }
+                : undefined
+            }
+          />
+        )}
       </section>
 
       {(canWrite || membership) && (

@@ -4,11 +4,22 @@ import type { QuizItem } from '@/types/database'
 
 type Props = {
   quiz: QuizItem[]
+  bookTitle?: string
+  chapterTitle?: string
+  onScored?: (ok: number, total: number) => void
+  onShareScore?: (ok: number, total: number) => void | Promise<void>
 }
 
-export default function QuizPlayer({ quiz }: Props) {
+export default function QuizPlayer({
+  quiz,
+  bookTitle,
+  chapterTitle,
+  onScored,
+  onShareScore,
+}: Props) {
   const [answers, setAnswers] = useState<Record<number, number | string>>({})
   const [submitted, setSubmitted] = useState(false)
+  const [shareNote, setShareNote] = useState<string | null>(null)
 
   const score = useMemo(() => {
     if (!submitted) return null
@@ -31,6 +42,25 @@ export default function QuizPlayer({ quiz }: Props) {
 
   if (!quiz.length) {
     return <p className="muted">Henüz quiz yok.</p>
+  }
+
+  async function shareScore() {
+    if (!score) return
+    const line = `Studium quiz: “${chapterTitle || 'Ünite'}”${
+      bookTitle ? ` · ${bookTitle}` : ''
+    } → ${score.ok}/${score.total}`
+    try {
+      if (onShareScore) {
+        await onShareScore(score.ok, score.total)
+        setShareNote('Skor paylaşıldı ✓')
+      } else {
+        await navigator.clipboard.writeText(line)
+        setShareNote('Skor panoya kopyalandı ✓')
+      }
+    } catch {
+      window.prompt('Skoru kopyala:', line)
+    }
+    window.setTimeout(() => setShareNote(null), 2200)
   }
 
   return (
@@ -105,7 +135,24 @@ export default function QuizPlayer({ quiz }: Props) {
       {!submitted ? (
         <button
           type="button"
-          onClick={() => setSubmitted(true)}
+          onClick={() => {
+            setSubmitted(true)
+            let ok = 0
+            quiz.forEach((q, i) => {
+              if (q.type === 'short') {
+                const a = String(answers[i] ?? '')
+                  .trim()
+                  .toLowerCase()
+                const expect = String(q.correct_text ?? '')
+                  .trim()
+                  .toLowerCase()
+                if (a && expect && a === expect) ok += 1
+              } else if (answers[i] === q.correct_index) {
+                ok += 1
+              }
+            })
+            onScored?.(ok, quiz.length)
+          }}
           className="btn-primary"
         >
           Kontrol et
@@ -121,10 +168,19 @@ export default function QuizPlayer({ quiz }: Props) {
             onClick={() => {
               setAnswers({})
               setSubmitted(false)
+              setShareNote(null)
             }}
           >
             Yeniden çöz
           </button>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            onClick={() => void shareScore()}
+          >
+            {onShareScore ? 'Skoru gruba gönder' : 'Skoru kopyala'}
+          </button>
+          {shareNote && <p className="muted text-[11px]">{shareNote}</p>}
         </div>
       )}
     </div>

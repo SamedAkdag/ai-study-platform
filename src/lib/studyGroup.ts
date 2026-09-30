@@ -377,3 +377,62 @@ export async function bootstrapBookGroup(bookId: string) {
   await ensureOwnerMembership(group.id)
   return group
 }
+
+/**
+ * Public book link → join (or keep) as read member so chat becomes available.
+ * Does not upgrade existing higher roles.
+ */
+export async function joinPublicBookAsReader(
+  bookId: string,
+  displayName?: string,
+): Promise<GroupMember> {
+  const { data: book, error: bookError } = await supabase
+    .from('books')
+    .select('id, is_public, share_token, title')
+    .eq('id', bookId)
+    .maybeSingle()
+  if (bookError) throw bookError
+  if (!book?.is_public || !book.share_token) {
+    throw new Error('Bu çalışma private — gruba yalnızca davetle katılınır.')
+  }
+
+  const group = await ensureStudyGroup(bookId)
+  const memberKey = getOrCreateMemberKey()
+  const name =
+    (displayName && setStoredDisplayName(displayName)) ||
+    getStoredDisplayName() ||
+    setStoredDisplayName('Okuyucu')
+
+  const { data: existing, error: findError } = await supabase
+    .from('group_members')
+    .select('*')
+    .eq('group_id', group.id)
+    .eq('member_key', memberKey)
+    .maybeSingle()
+  if (findError) throw findError
+  if (existing) return existing as GroupMember
+
+  const userId =
+    (await supabase.auth.getSession()).data.session?.user?.id ?? null
+
+  const { data, error } = await supabase
+    .from('group_members')
+    .insert({
+      group_id: group.id,
+      member_key: memberKey,
+      display_name: name,
+      role: 'read',
+      user_id: userId,
+    })
+    .select('*')
+    .single()
+  if (error) throwAsError(error, 'Gruba katılım başarısız')
+
+  rememberLibraryBook({
+    bookId,
+    title: book.title,
+    shareToken: book.share_token,
+    source: 'group',
+  })
+  return data as GroupMember
+}

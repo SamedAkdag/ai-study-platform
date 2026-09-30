@@ -7,6 +7,11 @@ import ShareBookButton from '@/components/ShareBookButton'
 import SendStudyButton from '@/components/SendStudyButton'
 import ShareStats from '@/components/ShareStats'
 import { useStudySession } from '@/hooks/useStudySession'
+import {
+  chapterProgressLabel,
+  getBookProgress,
+  summarizeBookProgress,
+} from '@/lib/studyProgress'
 
 function statusLabel(status: string) {
   if (status === 'ready') return 'hazır'
@@ -49,6 +54,11 @@ export default function BookPage() {
   const chapters = chaptersQuery.data ?? []
   const ready = chapters.filter((c) => c.status === 'ready').length
   const progress = chapters.length ? Math.round((ready / chapters.length) * 100) : 0
+  const studyProgress = summarizeBookProgress(
+    bookId || '',
+    chapters.map((c) => c.id),
+  )
+  const progressMap = bookId ? getBookProgress(bookId) : {}
 
   return (
     <AppShell wide bookId={bookId} showBookTimer>
@@ -64,6 +74,12 @@ export default function BookPage() {
           <p className="muted mt-2 text-sm">
             {ready}/{chapters.length || '…'} ünite hazır
             {bookQuery.data?.subject ? ` · ${bookQuery.data.subject}` : ''}
+            {studyProgress.opened > 0
+              ? ` · ${studyProgress.opened} açıldı`
+              : ''}
+            {studyProgress.remaining > 0 && studyProgress.opened > 0
+              ? ` · ${studyProgress.remaining} kaldı`
+              : ''}
           </p>
           {bookQuery.data && (
             <ShareStats
@@ -119,6 +135,9 @@ export default function BookPage() {
                 <SubtopicChips items={ch.key_concepts ?? []} />
                 <span className="muted mt-1 block text-[11px]">
                   {statusLabel(ch.status)}
+                  {chapterProgressLabel(progressMap[ch.id])
+                    ? ` · ${chapterProgressLabel(progressMap[ch.id])}`
+                    : ''}
                 </span>
               </Link>
             </li>
