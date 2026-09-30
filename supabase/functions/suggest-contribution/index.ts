@@ -2,7 +2,7 @@
 // Secrets: TOKENHARBOR_API_KEY
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
-import { llmComplete, safeParseJson } from '../_shared/llm.ts'
+import { llmCompleteJson } from '../_shared/llm.ts'
 import { getMimoConfig } from '../_shared/mimo.ts'
 
 const corsHeaders = {
@@ -71,19 +71,15 @@ Bağlam:
 ${context || '(yok)'}`
     }
 
-    const { text, provider } = await llmComplete({
+    const { value: parsed, provider } = await llmCompleteJson({
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: user },
       ],
       temperature: 0.5,
       maxTokens: 900,
+      retries: 2,
     })
-
-    const parsed = safeParseJson(text)
-    if (!parsed || typeof parsed !== 'object') {
-      throw new Error('AI JSON parse failed')
-    }
 
     return new Response(JSON.stringify({ payload: parsed, provider }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

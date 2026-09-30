@@ -4,7 +4,7 @@
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
-import { llmComplete, safeParseJson } from '../_shared/llm.ts'
+import { llmCompleteJson } from '../_shared/llm.ts'
 import { getMimoConfig } from '../_shared/mimo.ts'
 
 const CHUNK_SIZE = 5
@@ -70,41 +70,16 @@ async function askJson(
   user: string,
   maxTokens: number,
 ): Promise<Record<string, unknown>> {
-  const { text } = await llmComplete({
+  const { value } = await llmCompleteJson({
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    json: true,
     temperature: 0.3,
     maxTokens,
+    retries: 2,
   })
-
-  try {
-    return safeParseJson(text) as Record<string, unknown>
-  } catch (firstErr) {
-    const { text: repaired } = await llmComplete({
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Fix the following into VALID compact JSON only. Escape quotes in strings. Do not truncate. No markdown fences.',
-        },
-        {
-          role: 'user',
-          content: `Broken JSON:\n${text.slice(0, 10000)}\n\nReturn corrected JSON only.`,
-        },
-      ],
-      json: true,
-      temperature: 0,
-      maxTokens: Math.min(maxTokens, 3000),
-    })
-    try {
-      return safeParseJson(repaired) as Record<string, unknown>
-    } catch {
-      throw firstErr
-    }
-  }
+  return value
 }
 
 /** Cascade per chunk in ONE call: invent K3 from source, then K2 from K3, then K1 from K2. */
@@ -124,19 +99,19 @@ async function generateChunkCascade(input: {
 3) Compress K2 into K1 (brief overview)
 Return VALID JSON only:
 {
-  "k3":"detailed markdown, ## Page N headings, max ~3500 chars",
-  "k2":"standard markdown with ## headings and **key terms**, max ~2200 chars",
-  "k1":"short markdown overview, max ~800 chars",
+  "k3":"detailed markdown, ## Page N headings, max ~2800 chars",
+  "k2":"standard markdown with ## headings and **key terms**, max ~1800 chars",
+  "k1":"short markdown overview, max ~700 chars",
   "topics":["up to 6 short topic labels"]
 }
-Rules: cover every listed page; do not invent facts; match style; source language; complete valid JSON.`,
+Rules: cover every listed page; do not invent facts; match style; source language; complete valid JSON; escape newlines inside strings as \\n.`,
     `Unit: ${input.title}
 Style: ${input.style}
 Pages: ${pageList}
 
 SOURCE:
 ${source}`,
-    4000,
+    3500,
   )
 
   const k3 =

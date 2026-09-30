@@ -280,35 +280,125 @@ export async function llmComplete(opts: {
 }
 
 export function stripMarkdownJson(raw: string): string {
-  const trimmed = raw.trim()
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-  if (fenced?.[1]) return fenced[1].trim()
-  return trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  let trimmed = raw.trim()
+  // Prefer fenced block anywhere in the reply
+  const fencedAnywhere = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
+  if (fencedAnywhere?.[1]) trimmed = fencedAnywhere[1].trim()
+  else {
+    trimmed = trimmed
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim()
+  }
+  return trimmed
 }
 
+/** Best-effort JSON parse for flaky LLM output (truncation, fences, bad escapes). */
 export function safeParseJson(raw: string): unknown {
   const cleaned = stripMarkdownJson(raw)
-  try {
-    return JSON.parse(cleaned)
-  } catch {
-    const start = cleaned.indexOf('{')
-    const end = cleaned.lastIndexOf('}')
-    if (start >= 0 && end > start) {
-      const slice = cleaned.slice(start, end + 1)
-      try {
-        return JSON.parse(slice)
-      } catch {
-        return JSON.parse(repairTruncatedJson(slice))
-      }
+  const attempts = [
+    cleaned,
+    extractBalancedObject(cleaned),
+    repairTruncatedJson(extractBalancedObject(cleaned) || cleaned),
+    repairCommonJsonIssues(cleaned),
+    repairTruncatedJson(repairCommonJsonIssues(cleaned)),
+  ].filter((s): s is string => !!s && s.trim().length > 0)
+
+  let lastErr: unknown
+  for (const candidate of attempts) {
+    try {
+      return JSON.parse(candidate)
+    } catch (err) {
+      lastErr = err
     }
-    throw new Error('AI response was not valid JSON')
   }
+
+  const detail =
+    lastErr instanceof Error ? lastErr.message : 'parse failed'
+  throw new Error(
+    `AI response was not valid JSON (${detail}). Snippet: ${cleaned.slice(0, 180)}`,
+  )
+}
+
+function extractBalancedObject(input: string): string | null {
+  const start = input.indexOf('{')
+  if (start < 0) return null
+
+  let depth = 0
+  let inString = false
+  let escape = false
+  for (let i = start; i < input.length; i += 1) {
+    const ch = input[i]!
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (ch === '\\' && inString) {
+      escape = true
+      continue
+    }
+    if (ch === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (ch === '{') depth += 1
+    if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return input.slice(start, i + 1)
+    }
+  }
+  // Truncated: take from first { to end for repairTruncatedJson
+  return input.slice(start)
+}
+
+function repairCommonJsonIssues(input: string): string {
+  let s = input
+    .replace(/^\uFEFF/, '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' ')
+    .replace(/,\s*([}\]])/g, '$1')
+
+  // Smart quotes → plain
+  s = s.replace(/[\u201C\u201D\u201E\u201F]/g, '"').replace(/[\u2018\u2019]/g, "'")
+
+  // Trailing commas again after other fixes
+  s = s.replace(/,\s*([}\]])/g, '$1')
+  return s
 }
 
 function repairTruncatedJson(input: string): string {
-  let s = input
-    .replace(/,\s*([}\]])/g, '$1')
-    .replace(/\r/g, '')
+  let s = repairCommonJsonIssues(input).replace(/\r/g, '')
+
+  // Escape raw newlines / tabs inside strings (common LLM mistake)
+  {
+    let out = ''
+    let inString = false
+    let escape = false
+    for (let i = 0; i < s.length; i += 1) {
+      const ch = s[i]!
+      if (escape) {
+        out += ch
+        escape = false
+        continue
+      }
+      if (ch === '\\' && inString) {
+        out += ch
+        escape = true
+        continue
+      }
+      if (ch === '"') {
+        inString = !inString
+        out += ch
+        continue
+      }
+      if (inString && (ch === '\n' || ch === '\r' || ch === '\t')) {
+        out += ch === '\t' ? '\\t' : '\\n'
+        continue
+      }
+      out += ch
+    }
+    s = out
+  }
 
   let inString = false
   let escape = false
@@ -354,4 +444,69 @@ function repairTruncatedJson(input: string): string {
 
   s = s.replace(/,\s*([}\]])/g, '$1')
   return s
+}
+
+/**
+ * Ask the LLM for JSON with retries + repair pass.
+ * Survives intermittent free-tier junk / truncated objects.
+ */
+export async function llmCompleteJson(opts: {
+  messages: ChatMessage[]
+  temperature?: number
+  maxTokens?: number
+  retries?: number
+}): Promise<{ value: Record<string, unknown>; provider: LlmResult['provider'] }> {
+  const retries = opts.retries ?? 2
+  let lastErr: Error = new Error('AI response was not valid JSON')
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const useJson = attempt < retries
+    try {
+      const { text, provider } = await llmComplete({
+        messages: opts.messages,
+        json: useJson,
+        temperature: attempt === 0 ? (opts.temperature ?? 0.3) : 0.15,
+        maxTokens: opts.maxTokens,
+      })
+      try {
+        const value = safeParseJson(text) as Record<string, unknown>
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          return { value, provider }
+        }
+        throw new Error('JSON root was not an object')
+      } catch (parseErr) {
+        lastErr = parseErr instanceof Error ? parseErr : new Error(String(parseErr))
+        // One repair call before next full regenerate
+        const { text: repaired } = await llmComplete({
+          messages: [
+            {
+              role: 'system',
+              content:
+                'Return ONLY valid compact JSON. Escape newlines as \\n inside strings. No markdown fences. Do not truncate.',
+            },
+            {
+              role: 'user',
+              content: `Fix into valid JSON object:\n${text.slice(0, 12000)}`,
+            },
+          ],
+          json: true,
+          temperature: 0,
+          maxTokens: Math.min(opts.maxTokens ?? 3000, 3500),
+        })
+        const value = safeParseJson(repaired) as Record<string, unknown>
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          return { value, provider }
+        }
+        throw new Error('Repaired JSON root was not an object')
+      }
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err))
+      if (attempt < retries) {
+        await sleep(800 * (attempt + 1))
+        continue
+      }
+    }
+  }
+
+  throw lastErr
 }
