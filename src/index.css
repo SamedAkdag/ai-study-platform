@@ -444,3 +444,56 @@ textarea {
   font-size: 0.8rem;
   border: 1px solid rgba(166, 124, 82, 0.22);
 }
+
+/* Text selection actions: desktop floats near selection; mobile docks to bottom */
+.selection-action-bar {
+  z-index: 45;
+}
+
+.selection-action-bar--float {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-width: min(100%, 22rem);
+}
+
+.selection-action-bar__preview {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--ink-soft);
+}
+
+.selection-action-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+@media (max-width: 720px), ((hover: none) and (pointer: coarse)) {
+  .selection-action-bar--float {
+    position: fixed;
+    top: auto !important;
+    left: 0.75rem !important;
+    right: 0.75rem;
+    bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+    max-width: none;
+    padding: 0.7rem 0.75rem;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--paper) 94%, white);
+    border: 1px solid var(--line);
+    box-shadow: 0 10px 28px rgba(28, 36, 44, 0.14);
+  }
+
+  .selection-action-bar__actions {
+    width: 100%;
+  }
+
+  .selection-action-bar__actions .btn-primary,
+  .selection-action-bar__actions .btn-ghost {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-height: 2.5rem;
+  }
+}

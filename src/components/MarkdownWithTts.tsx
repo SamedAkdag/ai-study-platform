@@ -1,59 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useTts } from '@/hooks/useTts'
+import {
+  preserveSelectionOnPointerDown,
+  useTextSelection,
+} from '@/hooks/useTextSelection'
 import TtsControls from '@/components/TtsControls'
 
 type Props = {
   markdown: string
 }
 
-type SelBtn = {
-  top: number
-  left: number
-  selectedText: string
-}
-
 /** Read-only markdown with local TTS (shared chapter view). */
 export default function MarkdownWithTts({ markdown }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const articleRef = useRef<HTMLElement>(null)
-  const [selBtn, setSelBtn] = useState<SelBtn | null>(null)
+  const { ctx: selection, clear: clearSelection } =
+    useTextSelection(articleRef)
   const tts = useTts()
 
   useEffect(() => () => tts.stop(), [])
 
-  const onMouseUp = useCallback(() => {
-    const root = articleRef.current
-    const wrap = wrapRef.current
-    if (!root || !wrap) return
-    window.setTimeout(() => {
-      const sel = window.getSelection()
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-        setSelBtn(null)
-        return
-      }
-      const range = sel.getRangeAt(0)
-      if (!root.contains(range.commonAncestorContainer)) {
-        setSelBtn(null)
-        return
-      }
-      const selectedText = sel.toString().replace(/\s+/g, ' ').trim()
-      if (selectedText.length < 3) {
-        setSelBtn(null)
-        return
-      }
-      const rect = range.getBoundingClientRect()
-      const wrapRect = wrap.getBoundingClientRect()
-      setSelBtn({
-        top: rect.bottom - wrapRect.top + wrap.scrollTop + 8,
-        left: Math.max(
-          0,
-          Math.min(rect.left - wrapRect.left, wrap.clientWidth - 200),
-        ),
-        selectedText,
-      })
-    }, 10)
-  }, [])
+  const selBar =
+    selection && wrapRef.current
+      ? (() => {
+          const wrap = wrapRef.current
+          const wrapRect = wrap.getBoundingClientRect()
+          return {
+            top:
+              selection.rect.bottom - wrapRect.top + wrap.scrollTop + 8,
+            left: Math.max(
+              0,
+              Math.min(
+                selection.rect.left - wrapRect.left,
+                wrap.clientWidth - 200,
+              ),
+            ),
+            selectedText: selection.selectedText,
+          }
+        })()
+      : null
 
   return (
     <div ref={wrapRef} className="relative space-y-3">
@@ -68,40 +54,48 @@ export default function MarkdownWithTts({ markdown }: Props) {
           {tts.chunkInfo.text}
         </p>
       )}
-      <article
-        ref={articleRef}
-        onMouseUp={onMouseUp}
-        className="prose max-w-none select-text"
-      >
+      <article ref={articleRef} className="prose max-w-none select-text">
         <ReactMarkdown>{markdown}</ReactMarkdown>
       </article>
-      {selBtn && (
+      {selBar && (
         <div
-          style={{ top: selBtn.top, left: selBtn.left }}
-          className="absolute z-30 flex flex-wrap gap-1.5"
+          data-selection-toolbar
+          style={{ top: selBar.top, left: selBar.left }}
+          className="selection-action-bar selection-action-bar--float"
         >
-          <button
-            type="button"
-            className="btn-primary !px-3 !py-1.5 text-xs"
-            onClick={() => {
-              tts.speakFromSelection(markdown, selBtn.selectedText)
-              setSelBtn(null)
-              window.getSelection()?.removeAllRanges()
-            }}
-          >
-            Buradan oku
-          </button>
-          <button
-            type="button"
-            className="btn-ghost !bg-white text-xs shadow-sm"
-            onClick={() => {
-              tts.speakPlain(selBtn.selectedText)
-              setSelBtn(null)
-              window.getSelection()?.removeAllRanges()
-            }}
-          >
-            Seçimi oku
-          </button>
+          <p className="selection-action-bar__preview md:hidden">
+            “
+            {selBar.selectedText.length > 72
+              ? `${selBar.selectedText.slice(0, 72)}…`
+              : selBar.selectedText}
+            ”
+          </p>
+          <div className="selection-action-bar__actions">
+            <button
+              type="button"
+              className="btn-primary !px-3 !py-2 text-xs"
+              onPointerDown={preserveSelectionOnPointerDown}
+              onClick={() => {
+                tts.speakFromSelection(markdown, selBar.selectedText)
+                clearSelection()
+                window.getSelection()?.removeAllRanges()
+              }}
+            >
+              Buradan oku
+            </button>
+            <button
+              type="button"
+              className="btn-ghost !bg-white text-xs shadow-sm"
+              onPointerDown={preserveSelectionOnPointerDown}
+              onClick={() => {
+                tts.speakPlain(selBar.selectedText)
+                clearSelection()
+                window.getSelection()?.removeAllRanges()
+              }}
+            >
+              Seçimi oku
+            </button>
+          </div>
         </div>
       )}
     </div>

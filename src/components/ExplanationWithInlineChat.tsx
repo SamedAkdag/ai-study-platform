@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { askAboutSelection, updateChapterMarkdownField } from '@/lib/api'
 import { insertAiNoteAfterSelection, isAiNoteBlockquote } from '@/lib/aiNotes'
 import { useTts } from '@/hooks/useTts'
+import {
+  preserveSelectionOnPointerDown,
+  useTextSelection,
+} from '@/hooks/useTextSelection'
 import TtsControls from '@/components/TtsControls'
 
 type Depth = 'brief' | 'standard' | 'detailed'
@@ -32,14 +36,6 @@ type Bubble = {
   savedAnswers: Record<number, 'saving' | 'saved' | 'error'>
 }
 
-type AskButton = {
-  top: number
-  left: number
-  selectedText: string
-  precedingContext: string
-  followingContext: string
-}
-
 function flattenText(node: ReactNode): string {
   if (node == null || typeof node === 'boolean') return ''
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -50,49 +46,6 @@ function flattenText(node: ReactNode): string {
     )
   }
   return ''
-}
-
-function readSelectionContext(root: HTMLElement): {
-  selectedText: string
-  precedingContext: string
-  followingContext: string
-  rect: DOMRect
-} | null {
-  const sel = window.getSelection()
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null
-
-  const range = sel.getRangeAt(0)
-  if (!root.contains(range.commonAncestorContainer)) return null
-
-  const selectedText = sel.toString().replace(/\s+/g, ' ').trim()
-  if (selectedText.length < 3) return null
-
-  const preRange = document.createRange()
-  preRange.selectNodeContents(root)
-  preRange.setEnd(range.startContainer, range.startOffset)
-  const before = preRange.toString()
-  const beforeLines = before
-    .split(/\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-  const precedingContext = beforeLines.slice(-20).join('\n')
-
-  const postRange = document.createRange()
-  postRange.selectNodeContents(root)
-  postRange.setStart(range.endContainer, range.endOffset)
-  const after = postRange.toString()
-  const afterLines = after
-    .split(/\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-  const followingContext = afterLines.slice(0, 20).join('\n')
-
-  return {
-    selectedText,
-    precedingContext,
-    followingContext,
-    rect: range.getBoundingClientRect(),
-  }
 }
 
 function toLocalPoint(
@@ -106,6 +59,14 @@ function toLocalPoint(
   }
 }
 
+function isCoarsePointer(): boolean {
+  if (typeof window === 'undefined') return false
+  return (
+    window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+    window.matchMedia('(max-width: 720px)').matches
+  )
+}
+
 export default function ExplanationWithInlineChat({
   chapterId,
   chapterTitle,
@@ -116,7 +77,8 @@ export default function ExplanationWithInlineChat({
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const articleRef = useRef<HTMLElement>(null)
-  const [askBtn, setAskBtn] = useState<AskButton | null>(null)
+  const { ctx: selection, clear: clearSelection } =
+    useTextSelection(articleRef)
   const [bubbles, setBubbles] = useState<Bubble[]>([])
   const [localMarkdown, setLocalMarkdown] = useState(markdown)
   const tts = useTts()
@@ -130,46 +92,36 @@ export default function ExplanationWithInlineChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stop only on unmount
   }, [])
 
-  const onMouseUp = useCallback(() => {
-    const root = articleRef.current
-    const wrap = wrapRef.current
-    if (!root || !wrap) return
-
-    window.setTimeout(() => {
-      const ctx = readSelectionContext(root)
-      if (!ctx) {
-        setAskBtn(null)
-        return
-      }
-
-      const pos = toLocalPoint(wrap, ctx.rect)
-      setAskBtn({
-        ...pos,
-        left: Math.min(pos.left, wrap.clientWidth - 170),
-        selectedText: ctx.selectedText,
-        precedingContext: ctx.precedingContext,
-        followingContext: ctx.followingContext,
-      })
-    }, 10)
-  }, [])
-
-  useEffect(() => {
-    const onScroll = () => setAskBtn(null)
-    window.addEventListener('scroll', onScroll, true)
-    return () => window.removeEventListener('scroll', onScroll, true)
-  }, [])
+  const askBar =
+    selection && wrapRef.current
+      ? (() => {
+          const pos = toLocalPoint(wrapRef.current, selection.rect)
+          return {
+            ...pos,
+            left: Math.min(pos.left, wrapRef.current.clientWidth - 170),
+            selectedText: selection.selectedText,
+            precedingContext: selection.precedingContext,
+            followingContext: selection.followingContext,
+          }
+        })()
+      : null
 
   function openBubble() {
-    if (!askBtn || !wrapRef.current) return
+    if (!selection || !wrapRef.current) return
+    const wrap = wrapRef.current
+    const pos = toLocalPoint(wrap, selection.rect)
+    const mobile = isCoarsePointer()
     setBubbles((prev) => [
       ...prev,
       {
         id: crypto.randomUUID(),
-        selectedText: askBtn.selectedText,
-        precedingContext: askBtn.precedingContext,
-        followingContext: askBtn.followingContext,
-        top: askBtn.top,
-        left: Math.min(askBtn.left, wrapRef.current!.clientWidth - 350),
+        selectedText: selection.selectedText,
+        precedingContext: selection.precedingContext,
+        followingContext: selection.followingContext,
+        top: mobile ? Math.max(12, wrap.scrollTop + 12) : pos.top,
+        left: mobile
+          ? 8
+          : Math.min(pos.left, Math.max(0, wrap.clientWidth - 350)),
         messages: [],
         draft: '',
         loading: false,
@@ -177,7 +129,7 @@ export default function ExplanationWithInlineChat({
         savedAnswers: {},
       },
     ])
-    setAskBtn(null)
+    clearSelection()
     window.getSelection()?.removeAllRanges()
   }
 
@@ -328,7 +280,6 @@ export default function ExplanationWithInlineChat({
 
       <article
         ref={articleRef}
-        onMouseUp={onMouseUp}
         className="prose max-w-none select-text"
       >
         <ReactMarkdown
@@ -348,60 +299,77 @@ export default function ExplanationWithInlineChat({
         </ReactMarkdown>
       </article>
 
-      {askBtn && (
+      {askBar && (
         <div
-          style={{ top: askBtn.top, left: askBtn.left }}
-          className="absolute z-30 flex flex-wrap gap-1.5"
+          data-selection-toolbar
+          style={{ top: askBar.top, left: askBar.left }}
+          className="selection-action-bar selection-action-bar--float"
         >
-          <button
-            type="button"
-            onClick={openBubble}
-            className="btn-primary !px-3 !py-1.5 text-xs"
-          >
-            Bu kısım hakkında sor
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              tts.speakFromSelection(localMarkdown, askBtn.selectedText)
-              setAskBtn(null)
-              window.getSelection()?.removeAllRanges()
-            }}
-            className="btn-ghost !bg-white text-xs shadow-sm"
-          >
-            Buradan oku
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              tts.speakPlain(askBtn.selectedText)
-              setAskBtn(null)
-              window.getSelection()?.removeAllRanges()
-            }}
-            className="btn-ghost !bg-white text-xs shadow-sm"
-          >
-            Seçimi oku
-          </button>
-          {onShowInBook && (
+          <p className="selection-action-bar__preview md:hidden">
+            “{askBar.selectedText.length > 72
+              ? `${askBar.selectedText.slice(0, 72)}…`
+              : askBar.selectedText}
+            ”
+          </p>
+          <div className="selection-action-bar__actions">
             <button
               type="button"
+              onPointerDown={preserveSelectionOnPointerDown}
+              onClick={openBubble}
+              className="btn-primary !px-3 !py-2 text-xs"
+            >
+              Bu kısım hakkında sor
+            </button>
+            <button
+              type="button"
+              onPointerDown={preserveSelectionOnPointerDown}
               onClick={() => {
-                onShowInBook(askBtn.selectedText)
-                setAskBtn(null)
+                tts.speakFromSelection(localMarkdown, askBar.selectedText)
+                clearSelection()
                 window.getSelection()?.removeAllRanges()
               }}
               className="btn-ghost !bg-white text-xs shadow-sm"
             >
-              Kitapta göster
+              Buradan oku
             </button>
-          )}
+            <button
+              type="button"
+              onPointerDown={preserveSelectionOnPointerDown}
+              onClick={() => {
+                tts.speakPlain(askBar.selectedText)
+                clearSelection()
+                window.getSelection()?.removeAllRanges()
+              }}
+              className="btn-ghost !bg-white text-xs shadow-sm"
+            >
+              Seçimi oku
+            </button>
+            {onShowInBook && (
+              <button
+                type="button"
+                onPointerDown={preserveSelectionOnPointerDown}
+                onClick={() => {
+                  onShowInBook(askBar.selectedText)
+                  clearSelection()
+                  window.getSelection()?.removeAllRanges()
+                }}
+                className="btn-ghost !bg-white text-xs shadow-sm"
+              >
+                Kitapta göster
+              </button>
+            )}
+          </div>
         </div>
       )}
 
       {bubbles.map((b) => (
         <div
           key={b.id}
-          style={{ top: b.top, left: b.left, width: 340 }}
+          style={{
+            top: b.top,
+            left: b.left,
+            width: 'min(340px, calc(100% - 16px))',
+          }}
           className="surface-panel absolute z-40 p-3.5"
         >
           <div className="mb-2 flex items-start justify-between gap-2">
