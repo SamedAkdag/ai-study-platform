@@ -208,6 +208,22 @@ export async function sendStudyShare(input: {
   bookId: string
   note?: string
 }) {
+  const { data: book, error: bookError } = await supabase
+    .from('books')
+    .select('id, is_public, user_id, title')
+    .eq('id', input.bookId)
+    .maybeSingle()
+  if (bookError) throw bookError
+  if (!book) throw new Error('Kitap bulunamadı')
+
+  const isOwner = book.user_id === input.fromUserId
+  const isPublic = !!book.is_public
+  if (!isOwner && !isPublic) {
+    throw new Error(
+      'Bu çalışma private. Yalnızca sahibi paylaşabilir; public açılınca sen de iletebilirsin.',
+    )
+  }
+
   const { data, error } = await supabase
     .from('study_shares')
     .insert({

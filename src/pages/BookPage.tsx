@@ -5,6 +5,7 @@ import { fetchBook, fetchChapters } from '@/lib/api'
 import AppShell from '@/components/AppShell'
 import ShareBookButton from '@/components/ShareBookButton'
 import SendStudyButton from '@/components/SendStudyButton'
+import ShareStats from '@/components/ShareStats'
 import { useStudySession } from '@/hooks/useStudySession'
 
 function statusLabel(status: string) {
@@ -64,6 +65,13 @@ export default function BookPage() {
             {ready}/{chapters.length || '…'} ünite hazır
             {bookQuery.data?.subject ? ` · ${bookQuery.data.subject}` : ''}
           </p>
+          {bookQuery.data && (
+            <ShareStats
+              className="mt-1.5"
+              viewCount={bookQuery.data.view_count}
+              shareCount={bookQuery.data.share_count}
+            />
+          )}
         </div>
         <div className="progress-track max-w-sm">
           <div className="progress-fill" style={{ width: `${progress}%` }} />
@@ -87,6 +95,7 @@ export default function BookPage() {
                   <SendStudyButton
                     bookId={bookQuery.data.id}
                     bookTitle={bookQuery.data.title}
+                    allowPrivate
                   />
                 </div>
               </div>

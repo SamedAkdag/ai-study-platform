@@ -6,9 +6,17 @@ import { listAcceptedFriends, sendStudyShare } from '@/lib/social'
 type Props = {
   bookId: string
   bookTitle: string
+  /** Owner can always send; recipients only when public. */
+  allowPrivate?: boolean
+  disabledReason?: string | null
 }
 
-export default function SendStudyButton({ bookId, bookTitle }: Props) {
+export default function SendStudyButton({
+  bookId,
+  bookTitle,
+  allowPrivate = false,
+  disabledReason = null,
+}: Props) {
   const { user, profile } = useAuth()
   const [open, setOpen] = useState(false)
   const [note, setNote] = useState('')
@@ -47,6 +55,10 @@ export default function SendStudyButton({ bookId, bookTitle }: Props) {
     )
   }
 
+  if (disabledReason && !allowPrivate) {
+    return <p className="muted text-xs">{disabledReason}</p>
+  }
+
   return (
     <div className="space-y-2">
       <button
@@ -65,7 +77,9 @@ export default function SendStudyButton({ bookId, bookTitle }: Props) {
           style={{ borderColor: 'var(--line)' }}
         >
           <p className="muted text-[11px]">
-            Kabul edilmiş arkadaşlarından birine doğrudan gönder.
+            {allowPrivate
+              ? 'Private olsa da sahip olarak doğrudan gönderebilirsin. Public açınca alıcı da iletebilir.'
+              : 'Kabul edilmiş arkadaşlarından birine doğrudan gönder.'}
           </p>
           <ul className="max-h-36 space-y-1 overflow-y-auto text-sm">
             {(friendsQuery.data ?? []).map((f) => (
@@ -88,7 +102,9 @@ export default function SendStudyButton({ bookId, bookTitle }: Props) {
             ))}
             {!friendsQuery.isLoading &&
               (friendsQuery.data ?? []).length === 0 && (
-                <li className="muted text-xs">Önce /social üzerinden arkadaş ekle.</li>
+                <li className="muted text-xs">
+                  Önce /social üzerinden arkadaş ekle.
+                </li>
               )}
           </ul>
           <input

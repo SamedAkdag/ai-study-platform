@@ -1,7 +1,11 @@
 import { Link, useParams } from 'react-router-dom'
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { fetchPublicBook, fetchPublicChapters } from '@/lib/api'
+import {
+  fetchPublicBook,
+  fetchPublicChapters,
+  recordPublicBookView,
+} from '@/lib/api'
 import AppShell from '@/components/AppShell'
 import {
   fetchMyMembership,
@@ -9,6 +13,8 @@ import {
   roleLabel,
 } from '@/lib/studyGroup'
 import GroupChatPanel from '@/components/GroupChatPanel'
+import ResharePanel from '@/components/ResharePanel'
+import ShareStats from '@/components/ShareStats'
 import { rememberLibraryBook } from '@/lib/library'
 
 export default function SharedBookPage() {
@@ -30,7 +36,11 @@ export default function SharedBookPage() {
       shareToken: b.share_token,
       source: 'shared',
     })
-  }, [bookQuery.data])
+    void recordPublicBookView(b.id).then(() => {
+      void bookQuery.refetch()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per loaded book
+  }, [bookQuery.data?.id])
 
   const chaptersQuery = useQuery({
     queryKey: ['public-chapters', bookQuery.data?.id],
@@ -66,7 +76,7 @@ export default function SharedBookPage() {
             Link geçersiz veya kapalı
           </h1>
           <p className="muted mt-2 text-sm">
-            Bu çalışma artık paylaşılmıyor olabilir.
+            Bu çalışma artık paylaşılmıyor olabilir (private yapılmış olabilir).
           </p>
           <Link to="/" className="btn-primary mt-6 inline-flex">
             Studium’a git
@@ -79,6 +89,7 @@ export default function SharedBookPage() {
   const book = bookQuery.data
   const chapters = chaptersQuery.data ?? []
   const membership = membershipQuery.data
+  const canReshare = !!book.is_public && !!book.share_token
 
   return (
     <AppShell wide>
@@ -87,15 +98,29 @@ export default function SharedBookPage() {
         <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
           {book.title}
         </h1>
-        <p className="muted max-w-xl text-sm">
-          {chapters.length} ünite
-          {book.subject ? ` · ${book.subject}` : ''}
-        </p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <p className="muted text-sm">
+            {chapters.length} ünite
+            {book.subject ? ` · ${book.subject}` : ''}
+          </p>
+          <ShareStats
+            viewCount={book.view_count}
+            shareCount={book.share_count}
+          />
+        </div>
         {membership ? (
           <p className="muted text-xs">
             {membership.display_name} · {roleLabel(membership.role)}
           </p>
         ) : null}
+        <div className="max-w-md">
+          <ResharePanel
+            bookId={book.id}
+            bookTitle={book.title}
+            shareToken={book.share_token!}
+            canReshare={canReshare}
+          />
+        </div>
       </header>
 
       <ul className="surface-panel space-y-3 p-4 sm:p-6">
@@ -116,14 +141,14 @@ export default function SharedBookPage() {
                 <p className="muted mt-1 text-sm">{ch.summary}</p>
               )}
               {ch.key_concepts && ch.key_concepts.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {ch.key_concepts.map((t) => (
-                  <span key={t} className="subtopic-chip">
-                    {t}
-                  </span>
-                ))}
-              </div>
-            )}
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {ch.key_concepts.map((t) => (
+                    <span key={t} className="subtopic-chip">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
             <Link
               to={`/s/${token}/chapters/${ch.id}`}

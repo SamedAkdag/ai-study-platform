@@ -372,12 +372,32 @@ export async function disableBookShare(bookId: string) {
 export async function fetchPublicBook(token: string) {
   const { data, error } = await supabase
     .from('public_shared_books')
-    .select('id, title, subject, share_token, created_at')
+    .select(
+      'id, title, subject, share_token, created_at, is_public, view_count, share_count',
+    )
     .eq('share_token', token)
     .maybeSingle()
   if (error) throw error
   if (!data) throw new Error('Paylaşım bulunamadı')
   return data
+}
+
+/** Count a public-book open once per browser tab session. */
+export async function recordPublicBookView(bookId: string) {
+  const key = `studium-viewed:${bookId}`
+  try {
+    if (sessionStorage.getItem(key)) return
+    sessionStorage.setItem(key, '1')
+  } catch {
+    // private mode / blocked storage — still record once this call
+  }
+  const { error } = await supabase.rpc('record_book_view', {
+    p_book_id: bookId,
+  })
+  if (error) {
+    // Non-fatal: stats should not block reading
+    console.warn('record_book_view', error.message)
+  }
 }
 
 export type PublicChapter = {

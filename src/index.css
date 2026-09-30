@@ -424,6 +424,22 @@ textarea {
   transition: color 0.12s ease;
 }
 
+.share-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ink-soft);
+}
+
+.share-stats__dot {
+  opacity: 0.55;
+  font-weight: 500;
+}
+
 .study-toolbar {
   display: flex;
   flex-wrap: wrap;

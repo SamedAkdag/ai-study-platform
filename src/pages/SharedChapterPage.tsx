@@ -9,6 +9,7 @@ import ContributionComposer from '@/components/ContributionComposer'
 import ContributionReviewPanel from '@/components/ContributionReviewPanel'
 import MarkdownWithTts from '@/components/MarkdownWithTts'
 import QuizPlayer from '@/components/QuizPlayer'
+import ShareStats from '@/components/ShareStats'
 import { useStudySession } from '@/hooks/useStudySession'
 import {
   fetchMyMembership,
@@ -126,6 +127,12 @@ export default function SharedChapterPage() {
         <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
           {ch.title}
         </h1>
+        {bookQuery.data && (
+          <ShareStats
+            viewCount={bookQuery.data.view_count}
+            shareCount={bookQuery.data.share_count}
+          />
+        )}
         {ch.summary && (
           <p className="muted max-w-2xl text-sm leading-relaxed">{ch.summary}</p>
         )}

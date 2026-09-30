@@ -14,6 +14,8 @@ export type Book = {
   study_seconds: number | null
   share_token: string | null
   is_public: boolean | null
+  view_count: number | null
+  share_count: number | null
   created_at: string
 }
 
@@ -193,6 +195,8 @@ export type Database = {
           study_seconds?: number | null
           share_token?: string | null
           is_public?: boolean | null
+          view_count?: number | null
+          share_count?: number | null
           created_at?: string
         },
         Partial<Book>
@@ -362,6 +366,9 @@ export type Database = {
           subject: string | null
           share_token: string | null
           created_at: string | null
+          is_public: boolean | null
+          view_count: number | null
+          share_count: number | null
         }
         Relationships: []
       }
@@ -392,6 +399,14 @@ export type Database = {
           p_chapter_id: string | null
           p_seconds: number
         }
+        Returns: undefined
+      }
+      record_book_view: {
+        Args: { p_book_id: string }
+        Returns: undefined
+      }
+      bump_book_share_count: {
+        Args: { p_book_id: string }
         Returns: undefined
       }
     }

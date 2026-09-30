@@ -68,7 +68,7 @@ export default function ShareBookButton({ book }: Props) {
             onClick={() => enableMutation.mutate()}
             className="btn-primary"
           >
-            Paylaşım ve grup oluştur
+            Public yap + grup oluştur
           </button>
         ) : (
           <>
@@ -86,13 +86,22 @@ export default function ShareBookButton({ book }: Props) {
               onClick={() => disableMutation.mutate()}
               className="btn-ghost"
             >
-              Paylaşımı kapat
+              Private yap
             </button>
           </>
         )}
       </div>
+      {!isPublic && (
+        <p className="muted text-xs">
+          Private iken yalnızca sen arkadaşlarına gönderebilirsin; alan kişi
+          başkasıyla paylaşamaz. Public açınca link + yeniden paylaşım açılır.
+        </p>
+      )}
       {isPublic && (
         <>
+          <p className="muted text-xs">
+            Public — linki olan herkes okuyabilir ve başkasıyla paylaşabilir.
+          </p>
           <p className="muted break-all text-xs">
             {window.location.origin}/s/{book.share_token}
           </p>
