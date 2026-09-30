@@ -3,6 +3,8 @@ import type { PageText, PageWindow } from './slidingWindow'
 import type { MergedChapter, WindowSegmentResult } from './mergeChapters'
 import { mergeWindowChapters } from './mergeChapters'
 import { sanitizeForPostgres } from './sanitize'
+import type { ExampleItem, QuizItem } from '@/types/database'
+import { extractFunctionsError } from './functionsError'
 
 const MIN_WINDOW_CHARS = 120
 const RETRY_PAD_PAGES = 2
@@ -13,6 +15,9 @@ export async function createBookRecord(input: {
   title: string
   totalPages: number
 }) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession()
   const { data, error } = await supabase
     .from('books')
     .insert({
@@ -20,6 +25,7 @@ export async function createBookRecord(input: {
       total_pages: input.totalPages,
       status: 'processing',
       progress_step: 'extracting',
+      user_id: session?.user?.id ?? null,
     })
     .select('*')
     .single()
@@ -104,18 +110,7 @@ async function invokeSegmentWindow(
   })
 
   if (error) {
-    let detail = error.message
-    try {
-      const ctx = (error as { context?: Response }).context
-      if (ctx && typeof ctx.json === 'function') {
-        const body = await ctx.json()
-        if (body?.error) detail = String(body.error)
-        else detail = `${detail} | ${JSON.stringify(body)}`
-      }
-    } catch {
-      /* keep detail */
-    }
-    throw new Error(detail)
+    throw new Error(await extractFunctionsError(error, data))
   }
 
   if (data?.error) {
@@ -264,16 +259,7 @@ export async function generateSingleChapterContent(input: {
   )
 
   if (error) {
-    let detail = error.message
-    try {
-      const ctx = (error as { context?: Response }).context
-      if (ctx && typeof ctx.json === 'function') {
-        const body = await ctx.json()
-        if (body?.error) detail = String(body.error)
-      }
-    } catch {
-      /* keep */
-    }
+    const detail = await extractFunctionsError(error, data)
     await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
     throw new Error(detail)
   }
@@ -333,6 +319,110 @@ export async function fetchChapter(chapterId: string) {
     .single()
   if (error) throw error
   return data
+}
+
+export async function bumpBookStudySeconds(bookId: string, delta: number) {
+  if (delta <= 0) return
+  const { data: current, error: readError } = await supabase
+    .from('books')
+    .select('study_seconds')
+    .eq('id', bookId)
+    .maybeSingle()
+  if (readError) throw readError
+  const next = (current?.study_seconds ?? 0) + delta
+  const { error } = await supabase
+    .from('books')
+    .update({ study_seconds: next })
+    .eq('id', bookId)
+  if (error) throw error
+}
+
+function makeShareToken() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+  }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+}
+
+export async function enableBookShare(bookId: string) {
+  const token = makeShareToken()
+  const { data, error } = await supabase
+    .from('books')
+    .update({ is_public: true, share_token: token })
+    .eq('id', bookId)
+    .select('*')
+    .single()
+  if (error) throw error
+  const { bootstrapBookGroup } = await import('./studyGroup')
+  await bootstrapBookGroup(bookId)
+  return data
+}
+
+export async function disableBookShare(bookId: string) {
+  const { data, error } = await supabase
+    .from('books')
+    .update({ is_public: false, share_token: null })
+    .eq('id', bookId)
+    .select('*')
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function fetchPublicBook(token: string) {
+  const { data, error } = await supabase
+    .from('public_shared_books')
+    .select('id, title, subject, share_token, created_at')
+    .eq('share_token', token)
+    .maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error('Paylaşım bulunamadı')
+  return data
+}
+
+export type PublicChapter = {
+  id: string
+  book_id: string
+  chapter_number: number
+  order_index: number | null
+  title: string
+  summary: string | null
+  key_concepts: string[] | null
+  explanation: string | null
+  explanation_brief: string | null
+  explanation_detailed: string | null
+  examples: ExampleItem[] | null
+  quiz: QuizItem[] | null
+  status: string
+}
+
+export async function fetchPublicChapters(bookId: string): Promise<PublicChapter[]> {
+  const { data, error } = await supabase
+    .from('public_shared_chapters')
+    .select(
+      'id, book_id, chapter_number, order_index, title, summary, key_concepts, explanation, explanation_brief, explanation_detailed, examples, quiz, status',
+    )
+    .eq('book_id', bookId)
+    .order('order_index', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as PublicChapter[]
+}
+
+export async function fetchPublicChapter(
+  chapterId: string,
+  bookId: string,
+): Promise<PublicChapter> {
+  const { data, error } = await supabase
+    .from('public_shared_chapters')
+    .select(
+      'id, book_id, chapter_number, order_index, title, summary, key_concepts, explanation, explanation_brief, explanation_detailed, examples, quiz, status',
+    )
+    .eq('id', chapterId)
+    .eq('book_id', bookId)
+    .maybeSingle()
+  if (error) throw error
+  if (!data) throw new Error('Ünite bulunamadı')
+  return data as PublicChapter
 }
 
 /** Ask AI for topic titles + short summaries. Falls back to heuristics on failure. */
@@ -425,12 +515,34 @@ function isBadTitle(title: string): boolean {
   )
 }
 
-/** Inline selection chat: only selected passage + ~10 preceding lines. */
+export async function updateChapterMarkdownField(input: {
+  chapterId: string
+  depth: 'brief' | 'standard' | 'detailed'
+  markdown: string
+}) {
+  const patch =
+    input.depth === 'brief'
+      ? { explanation_brief: input.markdown }
+      : input.depth === 'detailed'
+        ? { explanation_detailed: input.markdown }
+        : { explanation: input.markdown }
+
+  const { data, error } = await supabase
+    .from('chapters')
+    .update(patch)
+    .eq('id', input.chapterId)
+    .select('*')
+    .single()
+
+  if (error) throw error
+  return data
+}
 export async function askAboutSelection(input: {
   chapterId: string
   chapterTitle: string
   selectedText: string
   precedingContext: string
+  followingContext?: string
   question: string
   history: Array<{ role: 'user' | 'assistant'; content: string }>
 }) {
@@ -440,26 +552,44 @@ export async function askAboutSelection(input: {
       chapter_title: input.chapterTitle,
       selected_text: input.selectedText,
       preceding_context: input.precedingContext,
+      following_context: input.followingContext || '',
       question: input.question,
       history: input.history,
     },
   })
 
   if (error) {
-    let detail = error.message
-    try {
-      const ctx = (error as { context?: Response }).context
-      if (ctx && typeof ctx.json === 'function') {
-        const body = await ctx.json()
-        if (body?.error) detail = String(body.error)
-      }
-    } catch {
-      /* keep */
-    }
-    throw new Error(detail)
+    throw new Error(await extractFunctionsError(error, data))
   }
 
   if (data?.error) throw new Error(String(data.error))
   if (typeof data?.answer !== 'string') throw new Error('Boş AI yanıtı')
   return data.answer as string
+}
+
+export async function suggestContribution(input: {
+  kind: 'quiz' | 'example' | 'explanation'
+  chapterTitle: string
+  hint: string
+  quizType?: string
+  context?: string
+}) {
+  const { data, error } = await supabase.functions.invoke(
+    'suggest-contribution',
+    {
+      body: {
+        kind: input.kind,
+        chapter_title: input.chapterTitle,
+        hint: input.hint,
+        quiz_type: input.quizType || 'mcq',
+        context: input.context || '',
+      },
+    },
+  )
+  if (error) throw new Error(await extractFunctionsError(error, data))
+  if (data?.error) throw new Error(String(data.error))
+  if (!data?.payload || typeof data.payload !== 'object') {
+    throw new Error('AI öneri boş döndü')
+  }
+  return data.payload as Record<string, unknown>
 }

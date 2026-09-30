@@ -5,9 +5,9 @@ import { fetchBook, fetchChapters } from '@/lib/api'
 import AppShell from '@/components/AppShell'
 
 const STEPS = [
-  { key: 'extracting', label: 'Metin çıkarılıyor' },
-  { key: 'analyzing', label: 'Sayfa iskeleti okunuyor' },
-  { key: 'segmenting', label: 'Konu üniteleri ayrılıyor' },
+  { key: 'extracting', label: 'PDF metni hazır' },
+  { key: 'analyzing', label: 'Sayfalar taranıyor' },
+  { key: 'segmenting', label: 'MiMo alt başlık + ünite gruplama' },
   { key: 'saving', label: 'Liste kaydediliyor' },
   { key: 'ready', label: 'Hazır' },
 ] as const
@@ -23,7 +23,7 @@ export default function ProcessingPage() {
     refetchInterval: (q) =>
       q.state.data?.status === 'ready' || q.state.data?.status === 'failed'
         ? false
-        : 1500,
+        : 1000,
   })
 
   const chaptersQuery = useQuery({
@@ -45,6 +45,8 @@ export default function ProcessingPage() {
     STEPS.findIndex((s) => s.key === step),
   )
   const chapters = chaptersQuery.data ?? []
+  const live = bookQuery.data?.error_message
+  const failed = bookQuery.data?.status === 'failed'
 
   return (
     <AppShell>
@@ -55,15 +57,15 @@ export default function ProcessingPage() {
             {bookQuery.data?.title || 'Kitabın işleniyor…'}
           </h1>
           <p className="muted mt-3 text-sm leading-relaxed">
-            Her ünite ~15–25 dakikalık tamamlanmış bir konu. Sayfa sayısı sabit
-            değil; cümle parçaları başlık olmaz.
+            MiMo (Token Harbor) konu ünitelerini ayırır. Hata olursa yerel yedek
+            yok — gerçek API mesajı burada görünür.
           </p>
         </header>
 
         <ol className="surface-panel space-y-2 p-4">
           {STEPS.filter((s) => s.key !== 'ready').map((s, i) => {
             const done = i < stepIndex || step === 'ready'
-            const active = s.key === step
+            const active = s.key === step && !failed
             return (
               <li
                 key={s.key}
@@ -93,12 +95,21 @@ export default function ProcessingPage() {
           })}
         </ol>
 
-        {bookQuery.data?.status === 'failed' && (
+        {!failed && live && (
+          <div className="alert-info mt-5 break-words">
+            <p className="text-xs font-semibold tracking-wide uppercase">
+              Canlı durum
+            </p>
+            <p className="mt-1 text-sm whitespace-pre-wrap">{live}</p>
+          </div>
+        )}
+
+        {failed && (
           <div className="alert-error mt-5 space-y-2">
-            <p className="font-semibold">İşlem başarısız oldu.</p>
-            {bookQuery.data.error_message && (
-              <p className="text-xs break-words opacity-90">
-                {bookQuery.data.error_message}
+            <p className="font-semibold">İşlem başarısız oldu</p>
+            {live && (
+              <p className="text-xs break-words whitespace-pre-wrap opacity-95">
+                {live}
               </p>
             )}
             <Link to="/" className="inline-block font-semibold underline">

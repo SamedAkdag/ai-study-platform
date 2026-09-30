@@ -4,18 +4,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchChapter, generateSingleChapterContent } from '@/lib/api'
 import ExplanationWithInlineChat from '@/components/ExplanationWithInlineChat'
 import AppShell from '@/components/AppShell'
+import QuizPlayer from '@/components/QuizPlayer'
 import {
   findRelatedPassages,
   parsePageTextToSources,
   type PageSource,
 } from '@/lib/sourceLookup'
-import type { QuizItem } from '@/types/database'
+import { useStudySession } from '@/hooks/useStudySession'
 
 type Tab = 'explanation' | 'examples' | 'quiz' | 'sources'
 type Depth = 'brief' | 'standard' | 'detailed'
 
 export default function ChapterPage() {
   const { bookId, chapterId } = useParams<{ bookId: string; chapterId: string }>()
+  useStudySession(bookId, chapterId)
   const [tab, setTab] = useState<Tab>('explanation')
   const [depth, setDepth] = useState<Depth>('standard')
   const [stylePref, setStylePref] = useState(
@@ -84,9 +86,9 @@ export default function ChapterPage() {
   ]
 
   const depths: { id: Depth; label: string; hint: string }[] = [
-    { id: 'brief', label: 'Hızlı özet', hint: '~1–2 dk' },
-    { id: 'standard', label: 'Genel anlatım', hint: '~10–15 dk' },
-    { id: 'detailed', label: 'Full detay', hint: 'sayfa sayfa' },
+    { id: 'brief', label: 'Özet (K1)', hint: '~1–2 dk' },
+    { id: 'standard', label: 'Detaylı özet (K2)', hint: '~10–15 dk' },
+    { id: 'detailed', label: 'Full detay (K3)', hint: 'sayfa sayfa' },
   ]
 
   function showInBook(selected: string) {
@@ -96,73 +98,60 @@ export default function ChapterPage() {
   }
 
   return (
-    <AppShell>
+    <AppShell bookId={bookId} showBookTimer>
       <header className="mb-7 space-y-3">
         <Link to={`/books/${bookId}`} className="btn-ghost">
           ← Kitaba dön
         </Link>
         <div>
-          <p
-            className="mb-2 text-xs font-semibold tracking-[0.18em] uppercase"
-            style={{ color: 'var(--accent)' }}
-          >
-            Çalışma ünitesi
-          </p>
+          <p className="section-label mb-2">Ünite</p>
           <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
             {ch?.title || '…'}
           </h1>
-          {ch && (
-            <p className="muted mt-2 text-sm">
-              s. {ch.start_page}–{ch.end_page} · {ch.status}
-              {pageSources.length > 0
-                ? ` · ${pageSources.length} sayfa kaynağı`
-                : ''}
-            </p>
-          )}
           {ch?.summary && (
             <p className="muted mt-3 max-w-2xl text-sm leading-relaxed">
               {ch.summary}
             </p>
           )}
           {ch?.key_concepts && ch.key_concepts.length > 0 && (
-            <p className="mt-2 text-xs" style={{ color: 'var(--accent-deep)' }}>
-              <span className="font-semibold">Konular: </span>
-              {ch.key_concepts.join(' · ')}
-            </p>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {ch.key_concepts.map((t) => (
+                <span key={t} className="subtopic-chip">
+                  {t}
+                </span>
+              ))}
+            </div>
           )}
         </div>
       </header>
 
       {needsContent && ch?.status !== 'generating' && !generateMutation.isPending && (
-        <div className="surface-panel space-y-5 border-dashed p-6 sm:p-8">
+        <div className="surface-panel space-y-4 p-5 sm:p-7">
           <div className="text-center">
-            <p className="font-display text-xl font-semibold">
-              Materyal henüz hazır değil
-            </p>
-            <p className="muted mx-auto mt-2 max-w-md text-sm leading-relaxed">
-              Sayfalar kaynaktan okunarak 3 seviyeli anlatım, örnekler ve quiz
-              üretilecek.
+            <p className="font-display text-xl font-semibold">İçerik üret</p>
+            <p className="muted mx-auto mt-1.5 max-w-md text-sm">
+              Bu ünite için anlatım, örnek ve quiz oluştur.
             </p>
           </div>
-          <label className="block text-sm">
-            <span className="muted mb-1.5 block font-medium">
-              Anlatım tercihin (opsiyonel)
-            </span>
+          <details className="text-sm">
+            <summary className="muted cursor-pointer text-xs font-semibold">
+              Anlatım tercihi (opsiyonel)
+            </summary>
             <textarea
               value={stylePref}
               onChange={(e) => setStylePref(e.target.value)}
               rows={2}
-              placeholder="Örn. gerçek dünya örnekleriyle, basit dilde, sınav odaklı…"
-              className="field"
+              placeholder="Örn. basit dilde, sınav odaklı…"
+              className="field mt-2"
             />
-          </label>
+          </details>
           <div className="text-center">
             <button
               type="button"
               onClick={() => generateMutation.mutate()}
               className="btn-primary"
             >
-              Bu ünite için içerik üret
+              Üret
             </button>
           </div>
           {genError && <div className="alert-error text-center">{genError}</div>}
@@ -225,6 +214,12 @@ export default function ChapterPage() {
                     chapterId={ch.id}
                     chapterTitle={ch.title}
                     markdown={markdownForDepth}
+                    depth={depth}
+                    onMarkdownSaved={() => {
+                      void queryClient.invalidateQueries({
+                        queryKey: ['chapter', chapterId],
+                      })
+                    }}
                     onShowInBook={showInBook}
                   />
                 )}
@@ -262,7 +257,7 @@ export default function ChapterPage() {
               <ExamplesPanel examples={ch.examples ?? []} />
             )}
 
-            {tab === 'quiz' && <QuizPanel quiz={ch.quiz ?? []} />}
+            {tab === 'quiz' && <QuizPlayer quiz={ch.quiz ?? []} />}
 
             {tab === 'sources' && (
               <SourcesPanel
@@ -381,83 +376,5 @@ function ExamplesPanel({
         </li>
       ))}
     </ol>
-  )
-}
-
-function QuizPanel({ quiz }: { quiz: QuizItem[] }) {
-  const [answers, setAnswers] = useState<Record<number, number>>({})
-  const [submitted, setSubmitted] = useState(false)
-
-  const score = useMemo(() => {
-    if (!submitted) return null
-    let ok = 0
-    quiz.forEach((q, i) => {
-      if (answers[i] === q.correct_index) ok += 1
-    })
-    return { ok, total: quiz.length }
-  }, [answers, quiz, submitted])
-
-  if (!quiz.length) {
-    return <p className="muted">Henüz quiz yok.</p>
-  }
-
-  return (
-    <div className="space-y-6">
-      {quiz.map((q, i) => (
-        <div key={i} className="space-y-2">
-          <p className="font-display font-semibold">
-            {i + 1}. {q.question}
-          </p>
-          <div className="space-y-1.5">
-            {q.options.map((opt, oi) => {
-              const selected = answers[i] === oi
-              let border = 'var(--line)'
-              let bg = 'rgba(255,255,255,0.55)'
-              if (submitted) {
-                if (oi === q.correct_index) {
-                  border = 'rgba(13, 92, 86, 0.45)'
-                  bg = 'var(--accent-soft)'
-                } else if (selected) {
-                  border = 'rgba(155, 44, 44, 0.4)'
-                  bg = 'var(--danger-soft)'
-                }
-              } else if (selected) {
-                border = 'var(--ink)'
-                bg = 'rgba(16, 32, 51, 0.04)'
-              }
-              return (
-                <button
-                  key={oi}
-                  type="button"
-                  disabled={submitted}
-                  onClick={() => setAnswers((a) => ({ ...a, [i]: oi }))}
-                  className="block w-full rounded-xl border px-3 py-2.5 text-left text-sm transition"
-                  style={{ borderColor: border, background: bg }}
-                >
-                  {opt}
-                </button>
-              )
-            })}
-          </div>
-          {submitted && (
-            <p className="muted text-xs">{q.explanation}</p>
-          )}
-        </div>
-      ))}
-
-      {!submitted ? (
-        <button
-          type="button"
-          onClick={() => setSubmitted(true)}
-          className="btn-primary"
-        >
-          Kontrol et
-        </button>
-      ) : (
-        <p className="font-display text-lg font-semibold">
-          Skor: {score?.ok}/{score?.total}
-        </p>
-      )}
-    </div>
   )
 }

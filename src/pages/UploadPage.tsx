@@ -10,6 +10,8 @@ import {
 } from '@/lib/api'
 import { supabase } from '@/lib/supabase'
 import AppShell from '@/components/AppShell'
+import LibraryShelf from '@/components/LibraryShelf'
+import type { PageText } from '@/lib/slidingWindow'
 
 const MAX_MB = 50
 
@@ -23,6 +25,47 @@ function formatError(err: unknown): string {
   return 'Bilinmeyen hata'
 }
 
+/** Runs outside the React tree so navigate/unmount cannot kill the pipeline. */
+async function processBookPipeline(input: {
+  bookId: string
+  bookTitle: string
+  pages: PageText[]
+}) {
+  const { bookId, bookTitle, pages } = input
+
+  await supabase
+    .from('books')
+    .update({ progress_step: 'analyzing', status: 'processing' })
+    .eq('id', bookId)
+
+  await supabase
+    .from('books')
+    .update({ progress_step: 'segmenting' })
+    .eq('id', bookId)
+
+  const units = await segmentStudyUnits({
+    bookTitle,
+    pages,
+    onProgress: async (p) => {
+      await supabase
+        .from('books')
+        .update({
+          progress_step: p.phase === 'error' ? 'segmenting' : 'segmenting',
+          error_message: p.message.slice(0, 1500),
+        })
+        .eq('id', bookId)
+    },
+  })
+
+  await supabase
+    .from('books')
+    .update({ progress_step: 'saving', error_message: null })
+    .eq('id', bookId)
+
+  await saveChapters(bookId, units, pages)
+  await markBookReady(bookId)
+}
+
 export default function UploadPage() {
   const navigate = useNavigate()
   const [title, setTitle] = useState('')
@@ -30,6 +73,7 @@ export default function UploadPage() {
   const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [phase, setPhase] = useState<string | null>(null)
 
   async function handleFile(file: File | null) {
     if (!file || busy) return
@@ -44,18 +88,19 @@ export default function UploadPage() {
 
     setBusy(true)
     setError(null)
+    setPhase('PDF okunuyor…')
     let bookId: string | null = null
 
     try {
       const extracted = await extractPdfText(file)
       const bookTitle = title.trim() || extracted.title
 
+      setPhase('Kitap kaydı oluşturuluyor…')
       const created = await createBookRecord({
         title: bookTitle,
         totalPages: extracted.totalPages,
       })
-      const currentBookId = created.id
-      bookId = currentBookId
+      bookId = created.id
 
       await supabase
         .from('books')
@@ -65,90 +110,40 @@ export default function UploadPage() {
           status: 'processing',
           error_message: null,
         })
-        .eq('id', currentBookId)
+        .eq('id', bookId)
 
-      navigate(`/processing/${currentBookId}`, { replace: true })
+      navigate(`/processing/${bookId}`, { replace: true })
 
-      await supabase
-        .from('books')
-        .update({ progress_step: 'analyzing' })
-        .eq('id', currentBookId)
-
-      await supabase
-        .from('books')
-        .update({ progress_step: 'segmenting' })
-        .eq('id', currentBookId)
-
-      const units = await segmentStudyUnits({
+      await processBookPipeline({
+        bookId,
         bookTitle,
         pages: extracted.pages,
       })
 
-      await supabase
-        .from('books')
-        .update({ progress_step: 'saving' })
-        .eq('id', currentBookId)
-
-      await saveChapters(currentBookId, units, extracted.pages)
-      await markBookReady(currentBookId)
-      navigate(`/books/${currentBookId}`, { replace: true })
+      navigate(`/books/${bookId}`, { replace: true })
     } catch (err) {
       const msg = formatError(err)
       if (bookId) await markBookFailed(bookId, msg)
       setError(msg)
       setBusy(false)
+      setPhase(null)
     }
   }
 
   return (
     <AppShell>
-      <section className="mx-auto max-w-3xl">
-        <header className="fade-up mb-10 text-center">
-          <p
-            className="mb-3 text-xs font-semibold tracking-[0.22em] uppercase"
-            style={{ color: 'var(--accent)' }}
-          >
-            Studium
-          </p>
-          <h1 className="font-display text-4xl leading-tight font-semibold tracking-tight sm:text-5xl">
-            Upload your textbook.
-            <br />
-            <span style={{ color: 'var(--accent-deep)' }}>Study smarter.</span>
+      <section className="mx-auto max-w-2xl space-y-9">
+        <header className="fade-up space-y-3 text-center">
+          <p className="section-label">Studium</p>
+          <h1 className="font-display text-[2.35rem] font-semibold tracking-tight sm:text-4xl">
+            PDF yükle, çalışmaya başla
           </h1>
-          <p className="muted fade-up-delay mx-auto mt-4 max-w-xl text-base sm:text-lg">
-            PDF tarayıcıda okunur. Konu bütünlüğüne göre üniteler çıkarılır;
-            içerik yalnızca seçtiğin ünitede üretilir.
+          <p className="muted mx-auto max-w-sm text-[0.95rem] leading-relaxed">
+            Bir dosya seç. Üniteler hazır olunca listeden açıp oku.
           </p>
         </header>
 
-        <div className="fade-up-delay surface-panel space-y-5 p-5 sm:p-7">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm">
-              <span className="muted mb-1.5 block font-medium">Kitap adı</span>
-              <input
-                className="field"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Örn. Calculus I"
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="muted mb-1.5 block font-medium">Alan</span>
-              <select
-                className="field"
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-              >
-                <option value="">Seç…</option>
-                <option value="Math">Matematik</option>
-                <option value="Physics">Fizik</option>
-                <option value="History">Tarih</option>
-                <option value="Law">Hukuk / Maliye</option>
-                <option value="Other">Diğer</option>
-              </select>
-            </label>
-          </div>
-
+        <div className="fade-up-delay surface-panel space-y-4 p-5 sm:p-6">
           <label
             onDragOver={(e) => {
               e.preventDefault()
@@ -163,9 +158,9 @@ export default function UploadPage() {
             className={`dropzone ${dragging ? 'is-dragging' : ''}`}
           >
             <p className="font-display text-xl font-semibold">
-              {busy ? 'İşleniyor…' : 'PDF sürükle veya seç'}
+              {busy ? phase || 'İşleniyor…' : 'PDF’yi buraya bırak'}
             </p>
-            <p className="muted text-sm">.pdf · en fazla {MAX_MB}MB · tarayıcıda okunur</p>
+            <p className="muted text-sm">veya tıkla · en fazla {MAX_MB}MB</p>
             <input
               type="file"
               accept="application/pdf,.pdf"
@@ -175,8 +170,41 @@ export default function UploadPage() {
             />
           </label>
 
+          <details className="text-sm">
+            <summary className="muted cursor-pointer select-none text-xs font-semibold">
+              İsteğe bağlı: ad ve alan
+            </summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <input
+                className="field"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Kitap adı"
+              />
+              <select
+                className="field"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+              >
+                <option value="">Alan…</option>
+                <option value="Math">Matematik</option>
+                <option value="Physics">Fizik</option>
+                <option value="History">Tarih</option>
+                <option value="Law">Hukuk / Maliye</option>
+                <option value="Other">Diğer</option>
+              </select>
+            </div>
+          </details>
+
           {error && <div className="alert-error">{error}</div>}
         </div>
+
+        <section className="fade-up-delay space-y-2">
+          <p className="section-label">Kitaplık</p>
+          <div className="surface-panel px-5 py-2 sm:px-6">
+            <LibraryShelf />
+          </div>
+        </section>
       </section>
     </AppShell>
   )

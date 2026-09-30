@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { askAboutSelection } from '@/lib/api'
+import { askAboutSelection, updateChapterMarkdownField } from '@/lib/api'
+import { insertAiNoteAfterSelection, isAiNoteBlockquote } from '@/lib/aiNotes'
+import { useTts } from '@/hooks/useTts'
+import TtsControls from '@/components/TtsControls'
+
+type Depth = 'brief' | 'standard' | 'detailed'
 
 type Props = {
   chapterId: string
   chapterTitle: string
   markdown: string
+  depth: Depth
+  onMarkdownSaved?: () => void
   onShowInBook?: (selectedText: string) => void
 }
 
@@ -15,12 +22,14 @@ type Bubble = {
   id: string
   selectedText: string
   precedingContext: string
+  followingContext: string
   top: number
   left: number
   messages: ChatMessage[]
   draft: string
   loading: boolean
   error: string | null
+  savedAnswers: Record<number, 'saving' | 'saved' | 'error'>
 }
 
 type AskButton = {
@@ -28,11 +37,25 @@ type AskButton = {
   left: number
   selectedText: string
   precedingContext: string
+  followingContext: string
+}
+
+function flattenText(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(flattenText).join('')
+  if (typeof node === 'object' && node !== null && 'props' in node) {
+    return flattenText(
+      (node as { props?: { children?: ReactNode } }).props?.children,
+    )
+  }
+  return ''
 }
 
 function readSelectionContext(root: HTMLElement): {
   selectedText: string
   precedingContext: string
+  followingContext: string
   rect: DOMRect
 } | null {
   const sel = window.getSelection()
@@ -48,15 +71,26 @@ function readSelectionContext(root: HTMLElement): {
   preRange.selectNodeContents(root)
   preRange.setEnd(range.startContainer, range.startOffset)
   const before = preRange.toString()
-  const lines = before
+  const beforeLines = before
     .split(/\n/)
     .map((l) => l.trim())
     .filter(Boolean)
-  const precedingContext = lines.slice(-10).join('\n')
+  const precedingContext = beforeLines.slice(-20).join('\n')
+
+  const postRange = document.createRange()
+  postRange.selectNodeContents(root)
+  postRange.setStart(range.endContainer, range.endOffset)
+  const after = postRange.toString()
+  const afterLines = after
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const followingContext = afterLines.slice(0, 20).join('\n')
 
   return {
     selectedText,
     precedingContext,
+    followingContext,
     rect: range.getBoundingClientRect(),
   }
 }
@@ -76,12 +110,25 @@ export default function ExplanationWithInlineChat({
   chapterId,
   chapterTitle,
   markdown,
+  depth,
+  onMarkdownSaved,
   onShowInBook,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const articleRef = useRef<HTMLElement>(null)
   const [askBtn, setAskBtn] = useState<AskButton | null>(null)
   const [bubbles, setBubbles] = useState<Bubble[]>([])
+  const [localMarkdown, setLocalMarkdown] = useState(markdown)
+  const tts = useTts()
+
+  useEffect(() => {
+    setLocalMarkdown(markdown)
+  }, [markdown])
+
+  useEffect(() => {
+    return () => tts.stop()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stop only on unmount
+  }, [])
 
   const onMouseUp = useCallback(() => {
     const root = articleRef.current
@@ -101,6 +148,7 @@ export default function ExplanationWithInlineChat({
         left: Math.min(pos.left, wrap.clientWidth - 170),
         selectedText: ctx.selectedText,
         precedingContext: ctx.precedingContext,
+        followingContext: ctx.followingContext,
       })
     }, 10)
   }, [])
@@ -119,12 +167,14 @@ export default function ExplanationWithInlineChat({
         id: crypto.randomUUID(),
         selectedText: askBtn.selectedText,
         precedingContext: askBtn.precedingContext,
+        followingContext: askBtn.followingContext,
         top: askBtn.top,
         left: Math.min(askBtn.left, wrapRef.current!.clientWidth - 350),
         messages: [],
         draft: '',
         loading: false,
         error: null,
+        savedAnswers: {},
       },
     ])
     setAskBtn(null)
@@ -158,6 +208,7 @@ export default function ExplanationWithInlineChat({
         chapterTitle,
         selectedText: bubble.selectedText,
         precedingContext: bubble.precedingContext,
+        followingContext: bubble.followingContext,
         question,
         history,
       })
@@ -188,19 +239,113 @@ export default function ExplanationWithInlineChat({
     }
   }
 
+  async function addAnswerToNotes(bubbleId: string, messageIndex: number) {
+    const bubble = bubbles.find((b) => b.id === bubbleId)
+    if (!bubble) return
+    const msg = bubble.messages[messageIndex]
+    if (!msg || msg.role !== 'assistant') return
+    if (bubble.savedAnswers[messageIndex] === 'saved') return
+
+    const question =
+      [...bubble.messages]
+        .slice(0, messageIndex)
+        .reverse()
+        .find((m) => m.role === 'user')?.content || 'Soru'
+
+    setBubbles((prev) =>
+      prev.map((b) =>
+        b.id === bubbleId
+          ? {
+              ...b,
+              savedAnswers: { ...b.savedAnswers, [messageIndex]: 'saving' },
+            }
+          : b,
+      ),
+    )
+
+    try {
+      const next = insertAiNoteAfterSelection(
+        localMarkdown,
+        bubble.selectedText,
+        question,
+        msg.content,
+      )
+      await updateChapterMarkdownField({
+        chapterId,
+        depth,
+        markdown: next,
+      })
+      setLocalMarkdown(next)
+      onMarkdownSaved?.()
+      setBubbles((prev) =>
+        prev.map((b) =>
+          b.id === bubbleId
+            ? {
+                ...b,
+                savedAnswers: { ...b.savedAnswers, [messageIndex]: 'saved' },
+              }
+            : b,
+        ),
+      )
+    } catch (err) {
+      setBubbles((prev) =>
+        prev.map((b) =>
+          b.id === bubbleId
+            ? {
+                ...b,
+                savedAnswers: { ...b.savedAnswers, [messageIndex]: 'error' },
+                error:
+                  err instanceof Error
+                    ? err.message
+                    : 'Nota eklenemedi',
+              }
+            : b,
+        ),
+      )
+    }
+  }
+
   return (
     <div ref={wrapRef} className="relative">
-      <p className="muted mb-4 text-xs leading-relaxed">
-        Metni seç → soru sor veya kitaptaki ilgili kesiti aç. AI yalnızca seçim +
-        önceki ~10 satırı kullanır.
+      <p className="muted mb-3 text-xs leading-relaxed">
+        Seç → sor veya oku. Cevabı “Nota ekle” ile kaydedebilirsin.
       </p>
+
+      <div className="mb-4">
+        <TtsControls
+          tts={tts}
+          label="Oku"
+          onReadAll={() => tts.speakMarkdown(localMarkdown)}
+        />
+      </div>
+
+      {tts.status !== 'idle' && tts.status !== 'unsupported' && tts.chunkInfo && (
+        <p className="study-now-reading line-clamp-2">
+          {tts.status === 'paused' ? 'Duraklatıldı · ' : 'Okunuyor · '}
+          {tts.chunkInfo.text}
+        </p>
+      )}
 
       <article
         ref={articleRef}
         onMouseUp={onMouseUp}
         className="prose max-w-none select-text"
       >
-        <ReactMarkdown>{markdown}</ReactMarkdown>
+        <ReactMarkdown
+          components={{
+            blockquote: ({ children }) => {
+              const text = flattenText(children)
+              const isNote = isAiNoteBlockquote(text)
+              return (
+                <blockquote className={isNote ? 'study-ai-note' : undefined}>
+                  {children}
+                </blockquote>
+              )
+            },
+          }}
+        >
+          {localMarkdown}
+        </ReactMarkdown>
       </article>
 
       {askBtn && (
@@ -208,8 +353,34 @@ export default function ExplanationWithInlineChat({
           style={{ top: askBtn.top, left: askBtn.left }}
           className="absolute z-30 flex flex-wrap gap-1.5"
         >
-          <button type="button" onClick={openBubble} className="btn-primary !px-3 !py-1.5 text-xs">
+          <button
+            type="button"
+            onClick={openBubble}
+            className="btn-primary !px-3 !py-1.5 text-xs"
+          >
             Bu kısım hakkında sor
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              tts.speakFromSelection(localMarkdown, askBtn.selectedText)
+              setAskBtn(null)
+              window.getSelection()?.removeAllRanges()
+            }}
+            className="btn-ghost !bg-white text-xs shadow-sm"
+          >
+            Buradan oku
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              tts.speakPlain(askBtn.selectedText)
+              setAskBtn(null)
+              window.getSelection()?.removeAllRanges()
+            }}
+            className="btn-ghost !bg-white text-xs shadow-sm"
+          >
+            Seçimi oku
           </button>
           {onShowInBook && (
             <button
@@ -248,24 +419,49 @@ export default function ExplanationWithInlineChat({
             </button>
           </div>
 
-          <div className="mb-2 max-h-48 space-y-2 overflow-y-auto text-sm">
+          <div className="mb-2 max-h-52 space-y-2 overflow-y-auto text-sm">
             {b.messages.length === 0 && (
               <p className="muted text-xs">Bu seçimle ilgili sorunu yaz.</p>
             )}
             {b.messages.map((m, i) => (
-              <div
-                key={i}
-                className="rounded-lg px-2.5 py-1.5 text-xs whitespace-pre-wrap"
-                style={
-                  m.role === 'user'
-                    ? { background: 'var(--ink)', color: '#f5f8fb' }
-                    : {
-                        background: 'var(--accent-soft)',
-                        color: 'var(--accent-deep)',
-                      }
-                }
-              >
-                {m.content}
+              <div key={i} className="space-y-1">
+                <div
+                  className="rounded-lg px-2.5 py-1.5 text-xs whitespace-pre-wrap"
+                  style={
+                    m.role === 'user'
+                      ? { background: 'var(--ink)', color: '#f5f8fb' }
+                      : {
+                          background: 'var(--accent-soft)',
+                          color: 'var(--accent-deep)',
+                        }
+                  }
+                >
+                  {m.content}
+                </div>
+                {m.role === 'assistant' && (
+                  <button
+                    type="button"
+                    disabled={
+                      b.savedAnswers[i] === 'saving' ||
+                      b.savedAnswers[i] === 'saved'
+                    }
+                    onClick={() => void addAnswerToNotes(b.id, i)}
+                    className="btn-ghost !px-2 !py-1 text-[11px]"
+                    style={
+                      b.savedAnswers[i] === 'saved'
+                        ? { color: 'var(--accent-deep)' }
+                        : undefined
+                    }
+                  >
+                    {b.savedAnswers[i] === 'saving'
+                      ? 'Ekleniyor…'
+                      : b.savedAnswers[i] === 'saved'
+                        ? 'Nota eklendi ✓'
+                        : b.savedAnswers[i] === 'error'
+                          ? 'Tekrar dene'
+                          : 'Nota ekle'}
+                  </button>
+                )}
               </div>
             ))}
             {b.loading && <p className="muted text-xs">AI yanıtlıyor…</p>}

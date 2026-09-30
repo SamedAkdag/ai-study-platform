@@ -1,16 +1,16 @@
-// Shared LLM helper: Groq first, Gemini fallback on rate limits / outages.
-// Secrets: GROQ_API_KEY, GEMINI_API_KEY
+// Shared LLM: MiMo (Token Harbor) → Groq → Gemini
+// Secrets: TOKEN_HARBOR_API_KEY, GROQ_API_KEY?, GEMINI_API_KEY?
+
+import { callMimo, getMimoConfig } from './mimo.ts'
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const GROQ_MODEL = 'qwen/qwen3.8-27b'
 const GROQ_RETRIES = 2
 
-// Prefer stabler Flash variants; "latest" often 503 under load
 const GEMINI_MODELS = [
   'gemini-2.0-flash',
   'gemini-2.0-flash-lite',
   'gemini-1.5-flash',
-  'gemini-flash-latest',
 ]
 
 export type ChatMessage = {
@@ -20,7 +20,7 @@ export type ChatMessage = {
 
 export type LlmResult = {
   text: string
-  provider: 'groq' | 'gemini'
+  provider: 'mimo' | 'groq' | 'gemini'
 }
 
 function sleep(ms: number) {
@@ -183,7 +183,6 @@ async function callGemini(
         const status = (err as { status?: number }).status ?? 0
         const body = (err as { body?: string }).body ?? lastErr.message
 
-        // Unknown model → try next model immediately
         if (status === 404 || /not found|is not found/i.test(body)) {
           console.warn(`Gemini model unavailable: ${model}`)
           break
@@ -194,7 +193,6 @@ async function callGemini(
           continue
         }
 
-        // Transient on last attempt → try next model
         if (isTransientGemini(status, body)) {
           console.warn(`Gemini ${model} overloaded, trying next model`)
           break
@@ -208,18 +206,60 @@ async function callGemini(
   throw lastErr
 }
 
-/** Prefer Groq; on daily/minute rate limits fall back to Gemini. */
+function shouldFallback(err: unknown): boolean {
+  const code = (err as { code?: string }).code
+  const msg = err instanceof Error ? err.message : String(err)
+  return (
+    code === 'RATE_LIMIT' ||
+    isRateLimited(429, msg) ||
+    /429|503|rate.?limit|unavailable|overloaded/i.test(msg)
+  )
+}
+
+function fallbackAllowed(): boolean {
+  const flag = (Deno.env.get('ALLOW_LLM_FALLBACK') || '').toLowerCase()
+  return flag === '1' || flag === 'true' || flag === 'yes'
+}
+
+/**
+ * Primary: Xiaomi MiMo via Token Harbor.
+ * Groq/Gemini only if ALLOW_LLM_FALLBACK=true (and their keys exist).
+ */
 export async function llmComplete(opts: {
   messages: ChatMessage[]
   json?: boolean
   temperature?: number
   maxTokens?: number
 }): Promise<LlmResult> {
+  const { apiKey: mimoKey, model: mimoModel, baseURL } = getMimoConfig()
   const groqKey = Deno.env.get('GROQ_API_KEY')
   const geminiKey = Deno.env.get('GEMINI_API_KEY')
+  const allowFallback = fallbackAllowed()
 
-  if (!groqKey && !geminiKey) {
-    throw new Error('Neither GROQ_API_KEY nor GEMINI_API_KEY is set')
+  if (!mimoKey) {
+    throw new Error(
+      'TOKENHARBOR_API_KEY is not set in Supabase Edge secrets. ' +
+        'Add it (Dashboard → Edge Functions → Secrets), then redeploy functions. ' +
+        'Official: base https://tokenharbor.ai/v1 , model mimo-v2.6-flash:free. ' +
+        'MiMo is required; Gemini/Groq are not used unless ALLOW_LLM_FALLBACK=true.',
+    )
+  }
+
+  try {
+    const text = await callMimo(opts.messages, opts)
+    return { text, provider: 'mimo' }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+
+    if (!allowFallback) {
+      throw new Error(
+        `MiMo failed (${mimoModel} @ ${baseURL}): ${msg}. ` +
+          'No fallback (set ALLOW_LLM_FALLBACK=true only if you want Groq/Gemini).',
+      )
+    }
+
+    if (!shouldFallback(err)) throw err
+    console.warn('MiMo failed; ALLOW_LLM_FALLBACK=true → trying Groq/Gemini', msg)
   }
 
   if (groqKey) {
@@ -227,17 +267,14 @@ export async function llmComplete(opts: {
       const text = await callGroq(groqKey, opts.messages, opts)
       return { text, provider: 'groq' }
     } catch (err) {
-      const code = (err as { code?: string }).code
-      const msg = err instanceof Error ? err.message : String(err)
-      const shouldFallback =
-        code === 'RATE_LIMIT' || isRateLimited(429, msg) || /429/.test(msg)
-
-      if (!shouldFallback || !geminiKey) throw err
-      console.warn('Groq rate-limited/unavailable, falling back to Gemini')
+      if (!shouldFallback(err) || !geminiKey) throw err
+      console.warn('Groq unavailable, falling back to Gemini')
     }
   }
 
-  if (!geminiKey) throw new Error('GEMINI_API_KEY is not set')
+  if (!geminiKey) {
+    throw new Error('MiMo failed and no GROQ_API_KEY / GEMINI_API_KEY for fallback')
+  }
   const text = await callGemini(geminiKey, opts.messages, opts)
   return { text, provider: 'gemini' }
 }
@@ -254,7 +291,6 @@ export function safeParseJson(raw: string): unknown {
   try {
     return JSON.parse(cleaned)
   } catch {
-    // Try extracting outermost object
     const start = cleaned.indexOf('{')
     const end = cleaned.lastIndexOf('}')
     if (start >= 0 && end > start) {
@@ -269,13 +305,11 @@ export function safeParseJson(raw: string): unknown {
   }
 }
 
-/** Best-effort close of truncated JSON strings/arrays/objects. */
 function repairTruncatedJson(input: string): string {
   let s = input
-    .replace(/,\s*([}\]])/g, '$1') // trailing commas
+    .replace(/,\s*([}\]])/g, '$1')
     .replace(/\r/g, '')
 
-  // If we're inside an open string, close it
   let inString = false
   let escape = false
   for (let i = 0; i < s.length; i += 1) {
@@ -292,7 +326,6 @@ function repairTruncatedJson(input: string): string {
   }
   if (inString) s += '"'
 
-  // Close open brackets
   const stack: string[] = []
   inString = false
   escape = false

@@ -215,20 +215,17 @@ function absorb(
 ): MergedChapter {
   return {
     ...into,
-    title: pickUmbrellaTitle(into, from),
+    // Keep the first micro-topic title as the unit umbrella
+    title: into.title,
     end_page: endPage,
     summary: [into.summary, from.summary].filter(Boolean).join(' · ') || null,
-    key_concepts: uniqueStrings([...into.key_concepts, ...from.key_concepts]).slice(
-      0,
-      6,
-    ),
+    key_concepts: uniqueStrings([
+      ...into.key_concepts,
+      into.title,
+      from.title,
+      ...from.key_concepts,
+    ]).slice(0, 10),
   }
-}
-
-function pickUmbrellaTitle(a: MergedChapter, b: MergedChapter): string {
-  // Prefer the longer-running segment's title as umbrella
-  if (pageCount(a) >= pageCount(b)) return a.title
-  return b.title
 }
 
 function pageCount(c: { start_page: number; end_page: number }): number {
