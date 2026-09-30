@@ -15,7 +15,7 @@ type Props = {
 export default function MarkdownWithTts({ markdown }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const articleRef = useRef<HTMLElement>(null)
-  const { ctx: selection, clear: clearSelection } =
+  const { ctx: selection, clear: clearSelection, hold, snapshot } =
     useTextSelection(articleRef)
   const tts = useTts()
 
@@ -74,9 +74,13 @@ export default function MarkdownWithTts({ markdown }: Props) {
             <button
               type="button"
               className="btn-primary !px-3 !py-2 text-xs"
-              onPointerDown={preserveSelectionOnPointerDown}
-              onClick={() => {
-                tts.speakFromSelection(markdown, selBar.selectedText)
+              onPointerDown={(e) => preserveSelectionOnPointerDown(e, hold)}
+              onPointerUp={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const text =
+                  snapshot()?.selectedText ?? selBar.selectedText
+                tts.speakFromSelection(markdown, text)
                 clearSelection()
                 window.getSelection()?.removeAllRanges()
               }}
@@ -86,9 +90,13 @@ export default function MarkdownWithTts({ markdown }: Props) {
             <button
               type="button"
               className="btn-ghost !bg-white text-xs shadow-sm"
-              onPointerDown={preserveSelectionOnPointerDown}
-              onClick={() => {
-                tts.speakPlain(selBar.selectedText)
+              onPointerDown={(e) => preserveSelectionOnPointerDown(e, hold)}
+              onPointerUp={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const text =
+                  snapshot()?.selectedText ?? selBar.selectedText
+                tts.speakPlain(text)
                 clearSelection()
                 window.getSelection()?.removeAllRanges()
               }}

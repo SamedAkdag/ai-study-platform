@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from 'react'
 import ReactMarkdown from 'react-markdown'
 import { askAboutSelection, updateChapterMarkdownField } from '@/lib/api'
 import { insertAiNoteAfterSelection, isAiNoteBlockquote } from '@/lib/aiNotes'
@@ -77,7 +84,7 @@ export default function ExplanationWithInlineChat({
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const articleRef = useRef<HTMLElement>(null)
-  const { ctx: selection, clear: clearSelection } =
+  const { ctx: selection, clear: clearSelection, hold, snapshot } =
     useTextSelection(articleRef)
   const [bubbles, setBubbles] = useState<Bubble[]>([])
   const [localMarkdown, setLocalMarkdown] = useState(markdown)
@@ -102,25 +109,27 @@ export default function ExplanationWithInlineChat({
             selectedText: selection.selectedText,
             precedingContext: selection.precedingContext,
             followingContext: selection.followingContext,
+            rect: selection.rect,
           }
         })()
       : null
 
   function openBubble() {
-    if (!selection || !wrapRef.current) return
+    const snap = snapshot()
     const wrap = wrapRef.current
-    const pos = toLocalPoint(wrap, selection.rect)
+    if (!snap || !wrap) return
+    const pos = toLocalPoint(wrap, snap.rect)
     const mobile = isCoarsePointer()
     setBubbles((prev) => [
       ...prev,
       {
         id: crypto.randomUUID(),
-        selectedText: selection.selectedText,
-        precedingContext: selection.precedingContext,
-        followingContext: selection.followingContext,
-        top: mobile ? Math.max(12, wrap.scrollTop + 12) : pos.top,
+        selectedText: snap.selectedText,
+        precedingContext: snap.precedingContext,
+        followingContext: snap.followingContext,
+        top: mobile ? 0 : pos.top,
         left: mobile
-          ? 8
+          ? 0
           : Math.min(pos.left, Math.max(0, wrap.clientWidth - 350)),
         messages: [],
         draft: '',
@@ -131,6 +140,10 @@ export default function ExplanationWithInlineChat({
     ])
     clearSelection()
     window.getSelection()?.removeAllRanges()
+  }
+
+  function onToolbarPointerDown(e: PointerEvent | MouseEvent) {
+    preserveSelectionOnPointerDown(e, hold)
   }
 
   async function sendMessage(bubbleId: string) {
@@ -314,17 +327,25 @@ export default function ExplanationWithInlineChat({
           <div className="selection-action-bar__actions">
             <button
               type="button"
-              onPointerDown={preserveSelectionOnPointerDown}
-              onClick={openBubble}
+              onPointerDown={onToolbarPointerDown}
+              onPointerUp={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                openBubble()
+              }}
               className="btn-primary !px-3 !py-2 text-xs"
             >
               Bu kısım hakkında sor
             </button>
             <button
               type="button"
-              onPointerDown={preserveSelectionOnPointerDown}
-              onClick={() => {
-                tts.speakFromSelection(localMarkdown, askBar.selectedText)
+              onPointerDown={onToolbarPointerDown}
+              onPointerUp={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const text =
+                  snapshot()?.selectedText ?? askBar.selectedText
+                tts.speakFromSelection(localMarkdown, text)
                 clearSelection()
                 window.getSelection()?.removeAllRanges()
               }}
@@ -334,9 +355,13 @@ export default function ExplanationWithInlineChat({
             </button>
             <button
               type="button"
-              onPointerDown={preserveSelectionOnPointerDown}
-              onClick={() => {
-                tts.speakPlain(askBar.selectedText)
+              onPointerDown={onToolbarPointerDown}
+              onPointerUp={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const text =
+                  snapshot()?.selectedText ?? askBar.selectedText
+                tts.speakPlain(text)
                 clearSelection()
                 window.getSelection()?.removeAllRanges()
               }}
@@ -347,9 +372,13 @@ export default function ExplanationWithInlineChat({
             {onShowInBook && (
               <button
                 type="button"
-                onPointerDown={preserveSelectionOnPointerDown}
-                onClick={() => {
-                  onShowInBook(askBar.selectedText)
+                onPointerDown={onToolbarPointerDown}
+                onPointerUp={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  const text =
+                    snapshot()?.selectedText ?? askBar.selectedText
+                  onShowInBook(text)
                   clearSelection()
                   window.getSelection()?.removeAllRanges()
                 }}
@@ -365,12 +394,13 @@ export default function ExplanationWithInlineChat({
       {bubbles.map((b) => (
         <div
           key={b.id}
+          data-selection-toolbar
           style={{
             top: b.top,
             left: b.left,
             width: 'min(340px, calc(100% - 16px))',
           }}
-          className="surface-panel absolute z-40 p-3.5"
+          className="surface-panel selection-chat-panel absolute z-40 p-3.5"
         >
           <div className="mb-2 flex items-start justify-between gap-2">
             <p className="muted line-clamp-2 text-xs">
