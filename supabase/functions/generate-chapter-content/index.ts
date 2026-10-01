@@ -103,7 +103,7 @@ Sayfalar: ${pageList}
 
 SOURCE:
 ${source}`,
-    3500,
+    4000,
   )
 
   const k3 =

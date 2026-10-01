@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react'
+import { useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
 import { isAiNoteBlockquote } from '@/lib/aiNotes'
 import { normalizeMarkdownTables } from '@/lib/normalizeMarkdownTables'
 
@@ -17,6 +20,7 @@ export type CalloutKind =
   | 'key'
   | 'summary'
   | 'definition'
+  | 'exam'
   | 'default'
 
 function flattenText(node: ReactNode): string {
@@ -40,6 +44,7 @@ export function calloutKindFromText(text: string): CalloutKind {
   if (/^(önemli|kilit|anahtar|unutma|tip)\b/i.test(t)) return 'key'
   if (/^(özet|kısa özet|hatırla)\b/i.test(t)) return 'summary'
   if (/^(tanım|kavram)\b/i.test(t)) return 'definition'
+  if (/^(sınav\s*kart|ezber|flash)\b/i.test(t)) return 'exam'
   return 'default'
 }
 
@@ -50,14 +55,17 @@ function calloutClass(kind: CalloutKind): string {
   if (kind === 'key') return 'study-callout study-callout--key'
   if (kind === 'summary') return 'study-callout study-callout--summary'
   if (kind === 'definition') return 'study-callout study-callout--definition'
+  if (kind === 'exam') return 'study-callout study-callout--exam'
   return 'study-callout'
 }
 
 /**
- * Study content markdown — GFM tables + Pearson-like colored callouts.
+ * Study content markdown — GFM tables, KaTeX, Pearson-like callouts.
  */
 export default function StudyMarkdown({ markdown, compact }: Props) {
   const source = normalizeMarkdownTables(markdown)
+  const nextTableExam = useRef(false)
+
   return (
     <div
       className={
@@ -67,8 +75,19 @@ export default function StudyMarkdown({ markdown, compact }: Props) {
       }
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
         components={{
+          h2: ({ children }) => {
+            const text = flattenText(children)
+            const isExam = /sınav\s*kart/i.test(text)
+            nextTableExam.current = isExam
+            return (
+              <h2 className={isExam ? 'study-exam-heading' : undefined}>
+                {children}
+              </h2>
+            )
+          },
           blockquote: ({ children }) => {
             const text = flattenText(children)
             const kind = calloutKindFromText(text)
@@ -76,11 +95,21 @@ export default function StudyMarkdown({ markdown, compact }: Props) {
               <blockquote className={calloutClass(kind)}>{children}</blockquote>
             )
           },
-          table: ({ children }) => (
-            <div className="study-table-wrap">
-              <table className="study-table">{children}</table>
-            </div>
-          ),
+          table: ({ children }) => {
+            const exam = nextTableExam.current
+            nextTableExam.current = false
+            return (
+              <div
+                className={
+                  exam
+                    ? 'study-table-wrap study-table-wrap--exam'
+                    : 'study-table-wrap'
+                }
+              >
+                <table className="study-table">{children}</table>
+              </div>
+            )
+          },
           thead: ({ children }) => <thead>{children}</thead>,
           tbody: ({ children }) => <tbody>{children}</tbody>,
           tr: ({ children }) => <tr>{children}</tr>,

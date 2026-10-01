@@ -358,9 +358,51 @@ textarea {
   background: var(--gold-soft);
 }
 
+.study-callout--exam {
+  border-left-color: #7c5cbf;
+  background: #f3eefc;
+  color: #3d2f5c;
+}
+
 .study-callout--note strong,
 .study-callout--definition strong {
   color: #7a5630;
+}
+
+.study-callout--exam strong {
+  color: #5b3d9a;
+}
+
+.study-exam-heading {
+  margin-top: 1.85rem !important;
+  color: #5b3d9a !important;
+  background: linear-gradient(
+    90deg,
+    #f3eefc 0%,
+    rgba(243, 238, 252, 0.4) 65%,
+    transparent 100%
+  ) !important;
+  border-left-color: #7c5cbf !important;
+}
+
+.study-table-wrap--exam {
+  border-color: rgba(124, 92, 191, 0.28);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8), 0 10px 24px rgba(91, 61, 154, 0.08);
+}
+
+.study-table-wrap--exam .study-table thead th {
+  background: linear-gradient(180deg, #8b6fd1, #6b4fb8);
+}
+
+.study-textbook .katex {
+  font-size: 1.05em;
+}
+
+.study-textbook .katex-display {
+  margin: 0.85rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35rem 0;
 }
 
 .study-callout--warning strong {
