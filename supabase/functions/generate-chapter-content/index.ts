@@ -6,6 +6,10 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
 import { llmCompleteJson } from '../_shared/llm.ts'
 import { getMimoConfig } from '../_shared/mimo.ts'
+import {
+  cascadeSystemPrompt,
+  practiceSystemPrompt,
+} from '../_shared/pedagogy.ts'
 
 const CHUNK_SIZE = 5
 const MAX_CHUNK_CHARS = 10_000
@@ -75,7 +79,7 @@ async function askJson(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    temperature: 0.3,
+    temperature: 0.4,
     maxTokens,
     retries: 2,
   })
@@ -93,21 +97,9 @@ async function generateChunkCascade(input: {
   const pageList = pageNums.join(', ')
 
   const parsed = await askJson(
-    `You produce 3-depth study notes for ONE textbook chunk using cascade:
-1) Write K3 (full detail) from SOURCE only
-2) Compress K3 into K2 (detailed summary)
-3) Compress K2 into K1 (brief overview)
-Return VALID JSON only:
-{
-  "k3":"detailed markdown, ## Page N headings, max ~2800 chars",
-  "k2":"standard markdown with ## headings and **key terms**, max ~1800 chars",
-  "k1":"short markdown overview, max ~700 chars",
-  "topics":["up to 6 short topic labels"]
-}
-Rules: cover every listed page; do not invent facts; match style; source language; complete valid JSON; escape newlines inside strings as \\n.`,
-    `Unit: ${input.title}
-Style: ${input.style}
-Pages: ${pageList}
+    cascadeSystemPrompt(input.style),
+    `Ünite: ${input.title}
+Sayfalar: ${pageList}
 
 SOURCE:
 ${source}`,
@@ -285,20 +277,14 @@ serve(async (req) => {
     let quiz: QuizItem[] = []
     try {
       const practiceParsed = await askJson(
-        `Create practice material for a study unit.
-Return VALID complete JSON only:
-{
-  "examples":[{"problem":"string","solution_steps":["step1","step2"]}],
-  "quiz":[{"question":"string","options":["A","B","C","D"],"correct_index":0,"explanation":"string"}]
-}
-2 examples, 4 quiz questions. Source language. No invented facts outside the notes.`,
-        `Unit: ${title}
-Style: ${style}
+        practiceSystemPrompt(),
+        `Ünite: ${title}
+Stil: ${style}
 
-K1 BRIEF:
+K1 ÖZET:
 ${explanation_brief.slice(0, 2500)}
 
-K2 EXCERPT:
+K2 KESİT:
 ${explanation.slice(0, 3500)}`,
         2000,
       )

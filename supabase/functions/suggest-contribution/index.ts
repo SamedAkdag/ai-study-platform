@@ -4,6 +4,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { llmCompleteJson } from '../_shared/llm.ts'
 import { getMimoConfig } from '../_shared/mimo.ts'
+import { TUTOR_PERSONA_TR, TUTOR_RULES_TR } from '../_shared/pedagogy.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -43,18 +44,20 @@ serve(async (req) => {
     let user = ''
 
     if (kind === 'quiz') {
-      system = `You create one Turkish study quiz item as JSON only.
-type is one of: mcq | true_false | short
+      system = `${TUTOR_PERSONA_TR}
+${TUTOR_RULES_TR}
+Tek bir Türkçe quiz maddesi üret. type: mcq | true_false | short
 Return ONLY JSON:
-{"type":"...","question":"...","options":["..."],"correct_index":0,"correct_text":null,"explanation":"..."}
-For true_false use options ["Doğru","Yanlış"]. For short use options [] and correct_text filled.`
+{"type":"...","question":"...","options":["..."],"correct_index":0,"correct_text":null,"explanation":"doğru neden + yanlış şık tuzakları"}
+true_false options: ["Doğru","Yanlış"]. short: options [] + correct_text.`
       user = `Ünite: ${chapterTitle}
 İstenen tip: ${quizType}
 İpucu: ${hint || '(yok)'}
 Bağlam:
 ${context || '(yok)'}`
     } else if (kind === 'example') {
-      system = `You create one Turkish worked example as JSON only.
+      system = `${TUTOR_PERSONA_TR}
+Çözümlü örnek üret. Adımlar mantıksal olsun.
 Return ONLY JSON:
 {"problem":"...","solution_steps":["adım1","adım2"]}`
       user = `Ünite: ${chapterTitle}
@@ -62,7 +65,8 @@ Return ONLY JSON:
 Bağlam:
 ${context || '(yok)'}`
     } else {
-      system = `You write a short Turkish study explanation add-on as JSON only.
+      system = `${TUTOR_PERSONA_TR}
+Kısa ek anlatım: neden önemli + 1 benzetme + sık hata uyarısı.
 Return ONLY JSON:
 {"title":"...","markdown":"2-4 kısa paragraf markdown","depth":"standard"}`
       user = `Ünite: ${chapterTitle}

@@ -4,6 +4,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { llmComplete } from '../_shared/llm.ts'
 import { getMimoConfig } from '../_shared/mimo.ts'
+import { selectionTutorSystem } from '../_shared/pedagogy.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -44,36 +45,27 @@ serve(async (req) => {
       )
     }
 
-    const system = `You are a patient academic tutor for the study unit "${chapterTitle}".
+    const system = selectionTutorSystem(chapterTitle)
 
-CONTEXT RULES:
-- Primary source = SELECTED PASSAGE + nearby BEFORE/AFTER lines from the student's study notes.
-- Explain clearly in the student's language (usually Turkish).
-- You MAY rephrase, define terms, and give simple teaching examples grounded in this context.
-- If a detail is not in the context, say what IS known from the text, then state what is missing — do not invent legal/financial procedures.
-- Do not refuse normal textbook questions about companies, securities, dividends, or payments when they are study questions.
-- Keep answers concrete and helpful (not overly cautious). Prefer 1 short definition + 2–5 bullet points when useful.`
+    const contextBlock = `YAKIN METİN (SEÇİMDEN ÖNCE):
+${precedingContext || '(yok)'}
 
-    const contextBlock = `NEARBY TEXT BEFORE SELECTION:
-${precedingContext || '(none)'}
-
-SELECTED PASSAGE:
+SEÇİLİ PASAJ:
 ${selectedText}
 
-NEARBY TEXT AFTER SELECTION:
-${followingContext || '(none)'}`
+YAKIN METİN (SEÇİMDEN SONRA):
+${followingContext || '(yok)'}`
 
-    // Academic framing reduces false "high risk" rejections on finance textbooks
-    const framedQuestion = `Bu bir ders çalışması sorusudur (hukuk/maliye ders notu).
+    const framedQuestion = `Bu bir ders çalışması sorusudur.
 Öğrencinin sorusu: ${question}
 
-Lütfen seçili ders metnine ve yakın bağlamına göre öğretici bir cevap ver.`
+Seçili pasaja ve yakın bağlama göre öğretici cevap ver. Gerekirse bir benzetme ekle; metinde olmayanı uydurma.`
 
     const messages = [
       { role: 'system' as const, content: system },
       {
         role: 'user' as const,
-        content: `${contextBlock}\n\n(Use this study-note context.)`,
+        content: `${contextBlock}\n\n(Bu ders notu bağlamını kullan.)`,
       },
       ...history.slice(-8).map((h) => ({
         role: h.role as 'user' | 'assistant',
