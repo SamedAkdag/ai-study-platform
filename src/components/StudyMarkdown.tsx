@@ -10,6 +10,15 @@ type Props = {
   compact?: boolean
 }
 
+export type CalloutKind =
+  | 'note'
+  | 'analogy'
+  | 'warning'
+  | 'key'
+  | 'summary'
+  | 'definition'
+  | 'default'
+
 function flattenText(node: ReactNode): string {
   if (node == null || typeof node === 'boolean') return ''
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -22,23 +31,49 @@ function flattenText(node: ReactNode): string {
   return ''
 }
 
+/** Map blockquote lead labels → textbook callout chrome. */
+export function calloutKindFromText(text: string): CalloutKind {
+  const t = text.trim()
+  if (isAiNoteBlockquote(t)) return 'note'
+  if (/^(benzetme|analoji|örnekle)\b/i.test(t)) return 'analogy'
+  if (/^(dikkat|uyan|yanılgı|sık hata|yanlış)\b/i.test(t)) return 'warning'
+  if (/^(önemli|kilit|anahtar|unutma|tip)\b/i.test(t)) return 'key'
+  if (/^(özet|kısa özet|hatırla)\b/i.test(t)) return 'summary'
+  if (/^(tanım|kavram)\b/i.test(t)) return 'definition'
+  return 'default'
+}
+
+function calloutClass(kind: CalloutKind): string {
+  if (kind === 'note') return 'study-callout study-callout--note'
+  if (kind === 'analogy') return 'study-callout study-callout--analogy'
+  if (kind === 'warning') return 'study-callout study-callout--warning'
+  if (kind === 'key') return 'study-callout study-callout--key'
+  if (kind === 'summary') return 'study-callout study-callout--summary'
+  if (kind === 'definition') return 'study-callout study-callout--definition'
+  return 'study-callout'
+}
+
 /**
- * Study content markdown with GFM tables styled for Studium.
+ * Study content markdown — GFM tables + Pearson-like colored callouts.
  */
 export default function StudyMarkdown({ markdown, compact }: Props) {
   const source = normalizeMarkdownTables(markdown)
   return (
-    <div className={compact ? 'study-md study-md--compact' : 'study-md'}>
+    <div
+      className={
+        compact
+          ? 'study-md study-md--compact study-textbook'
+          : 'study-md study-textbook'
+      }
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           blockquote: ({ children }) => {
             const text = flattenText(children)
-            const isNote = isAiNoteBlockquote(text)
+            const kind = calloutKindFromText(text)
             return (
-              <blockquote className={isNote ? 'study-ai-note' : undefined}>
-                {children}
-              </blockquote>
+              <blockquote className={calloutClass(kind)}>{children}</blockquote>
             )
           },
           table: ({ children }) => (
