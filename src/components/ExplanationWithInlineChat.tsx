@@ -4,16 +4,15 @@ import {
   useState,
   type MouseEvent,
   type PointerEvent,
-  type ReactNode,
 } from 'react'
-import ReactMarkdown from 'react-markdown'
 import { askAboutSelection, updateChapterMarkdownField } from '@/lib/api'
-import { insertAiNoteAfterSelection, isAiNoteBlockquote } from '@/lib/aiNotes'
+import { insertAiNoteAfterSelection } from '@/lib/aiNotes'
 import { useTts } from '@/hooks/useTts'
 import {
   preserveSelectionOnPointerDown,
   useTextSelection,
 } from '@/hooks/useTextSelection'
+import StudyMarkdown from '@/components/StudyMarkdown'
 import TtsControls from '@/components/TtsControls'
 
 type Depth = 'brief' | 'standard' | 'detailed'
@@ -41,18 +40,6 @@ type Bubble = {
   loading: boolean
   error: string | null
   savedAnswers: Record<number, 'saving' | 'saved' | 'error'>
-}
-
-function flattenText(node: ReactNode): string {
-  if (node == null || typeof node === 'boolean') return ''
-  if (typeof node === 'string' || typeof node === 'number') return String(node)
-  if (Array.isArray(node)) return node.map(flattenText).join('')
-  if (typeof node === 'object' && node !== null && 'props' in node) {
-    return flattenText(
-      (node as { props?: { children?: ReactNode } }).props?.children,
-    )
-  }
-  return ''
 }
 
 function toLocalPoint(
@@ -295,21 +282,7 @@ export default function ExplanationWithInlineChat({
         ref={articleRef}
         className="prose max-w-none select-text"
       >
-        <ReactMarkdown
-          components={{
-            blockquote: ({ children }) => {
-              const text = flattenText(children)
-              const isNote = isAiNoteBlockquote(text)
-              return (
-                <blockquote className={isNote ? 'study-ai-note' : undefined}>
-                  {children}
-                </blockquote>
-              )
-            },
-          }}
-        >
-          {localMarkdown}
-        </ReactMarkdown>
+        <StudyMarkdown markdown={localMarkdown} />
       </article>
 
       {askBar && (
@@ -424,17 +397,25 @@ export default function ExplanationWithInlineChat({
             {b.messages.map((m, i) => (
               <div key={i} className="space-y-1">
                 <div
-                  className="rounded-lg px-2.5 py-1.5 text-xs whitespace-pre-wrap"
+                  className="rounded-lg px-2.5 py-1.5 text-xs"
                   style={
                     m.role === 'user'
-                      ? { background: 'var(--ink)', color: '#f5f8fb' }
+                      ? {
+                          background: 'var(--ink)',
+                          color: '#f5f8fb',
+                          whiteSpace: 'pre-wrap',
+                        }
                       : {
                           background: 'var(--accent-soft)',
                           color: 'var(--accent-deep)',
                         }
                   }
                 >
-                  {m.content}
+                  {m.role === 'assistant' ? (
+                    <StudyMarkdown markdown={m.content} compact />
+                  ) : (
+                    m.content
+                  )}
                 </div>
                 {m.role === 'assistant' && (
                   <button

@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react'
-import ReactMarkdown from 'react-markdown'
 import { useTts } from '@/hooks/useTts'
 import {
   preserveSelectionOnPointerDown,
   useTextSelection,
 } from '@/hooks/useTextSelection'
+import StudyMarkdown from '@/components/StudyMarkdown'
 import TtsControls from '@/components/TtsControls'
 
 type Props = {
@@ -55,7 +55,7 @@ export default function MarkdownWithTts({ markdown }: Props) {
         </p>
       )}
       <article ref={articleRef} className="prose max-w-none select-text">
-        <ReactMarkdown>{markdown}</ReactMarkdown>
+        <StudyMarkdown markdown={markdown} />
       </article>
       {selBar && (
         <div
