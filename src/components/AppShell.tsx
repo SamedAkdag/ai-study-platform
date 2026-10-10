@@ -100,14 +100,12 @@ export default function AppShell({
 
       <footer className="site-footer">
         <a
-          className="site-footer__card"
+          className="site-footer__link"
           href="https://araplhn.org/4/8d8abdc6923efc09dfeb1a9ac6a4dcbe"
           target="_blank"
           rel="noopener noreferrer sponsored"
         >
-          <span className="site-footer__eyebrow">Sponsor</span>
-          <span className="site-footer__title">Önerilen kaynakları keşfet</span>
-          <span className="site-footer__cta">İncele →</span>
+          Partner bağlantısı
         </a>
       </footer>
 
