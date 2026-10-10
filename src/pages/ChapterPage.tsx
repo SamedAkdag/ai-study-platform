@@ -379,6 +379,16 @@ export default function ChapterPage() {
               </Link>
             </>
           )}
+          {ch?.status === 'ready' &&
+            (markdownForDepth || ch.explanation) && (
+              <button
+                type="button"
+                className="chip chip-active"
+                onClick={() => setFlashOpen(true)}
+              >
+                Flash Stories
+              </button>
+            )}
         </div>
         <div>
           <p className="section-label mb-2">Ünite</p>
