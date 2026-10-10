@@ -40,7 +40,7 @@ export default function AppShell({
   return (
     <div
       className={`page-shell ${wide ? 'max-w-none' : ''}`}
-      style={wide ? { width: 'min(1080px, calc(100% - 1.5rem))' } : undefined}
+      style={wide ? { width: 'min(1280px, calc(100% - 1rem))' } : undefined}
     >
       <header className="mb-7 flex flex-wrap items-center justify-between gap-3">
         <Link to="/" className="brand-mark">
@@ -97,6 +97,20 @@ export default function AppShell({
         </nav>
       </header>
       {children}
+
+      <footer className="site-footer">
+        <a
+          className="site-footer__card"
+          href="https://araplhn.org/4/8d8abdc6923efc09dfeb1a9ac6a4dcbe"
+          target="_blank"
+          rel="noopener noreferrer sponsored"
+        >
+          <span className="site-footer__eyebrow">Sponsor</span>
+          <span className="site-footer__title">Önerilen kaynakları keşfet</span>
+          <span className="site-footer__cta">İncele →</span>
+        </a>
+      </footer>
+
       {tourOpen ? (
         <ProductTour open onClose={() => setTourOpen(false)} />
       ) : autoTour ? (
