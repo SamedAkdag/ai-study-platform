@@ -1,12 +1,14 @@
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchBook, fetchChapters } from '@/lib/api'
 import AppShell from '@/components/AppShell'
 import ShareBookButton from '@/components/ShareBookButton'
 import SendStudyButton from '@/components/SendStudyButton'
 import ShareStats from '@/components/ShareStats'
 import { useStudySession } from '@/hooks/useStudySession'
+import { processBookPipeline } from '@/lib/processBook'
+import { friendlyAiError } from '@/lib/errors'
 import {
   chapterProgressLabel,
   getBookProgress,
@@ -36,8 +38,11 @@ function SubtopicChips({ items }: { items: string[] }) {
 
 export default function BookPage() {
   const { bookId } = useParams<{ bookId: string }>()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   useStudySession(bookId)
   const [shareOpen, setShareOpen] = useState(false)
+  const [unitError, setUnitError] = useState<string | null>(null)
 
   const bookQuery = useQuery({
     queryKey: ['book', bookId],
@@ -51,6 +56,22 @@ export default function BookPage() {
     enabled: !!bookId,
   })
 
+  const unitsMutation = useMutation({
+    mutationFn: async () => {
+      if (!bookId || !bookQuery.data) throw new Error('Kitap yok')
+      await processBookPipeline({
+        bookId,
+        bookTitle: bookQuery.data.title,
+      })
+    },
+    onSuccess: async () => {
+      setUnitError(null)
+      await queryClient.invalidateQueries({ queryKey: ['book', bookId] })
+      await queryClient.invalidateQueries({ queryKey: ['chapters', bookId] })
+    },
+    onError: (err) => setUnitError(friendlyAiError(err)),
+  })
+
   const chapters = chaptersQuery.data ?? []
   const ready = chapters.filter((c) => c.status === 'ready').length
   const progress = chapters.length ? Math.round((ready / chapters.length) * 100) : 0
@@ -59,6 +80,8 @@ export default function BookPage() {
     chapters.map((c) => c.id),
   )
   const progressMap = bookId ? getBookProgress(bookId) : {}
+  const isProcessing =
+    bookQuery.data?.status === 'processing' || unitsMutation.isPending
 
   return (
     <AppShell wide bookId={bookId} showBookTimer>
@@ -72,7 +95,9 @@ export default function BookPage() {
             {bookQuery.data?.title || '…'}
           </h1>
           <p className="muted mt-2 text-sm">
-            {ready}/{chapters.length || '…'} ünite hazır
+            {chapters.length
+              ? `${ready}/${chapters.length} ünite hazır`
+              : 'Henüz ünite yok — önce PDF’den çalışabilirsin'}
             {bookQuery.data?.subject ? ` · ${bookQuery.data.subject}` : ''}
             {studyProgress.opened > 0
               ? ` · ${studyProgress.opened} açıldı`
@@ -88,6 +113,25 @@ export default function BookPage() {
               shareCount={bookQuery.data.share_count}
             />
           )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link to={`/books/${bookId}/read`} className="btn-primary text-sm">
+              PDF + AI oku
+            </Link>
+            {chapters.length === 0 && (
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                disabled={isProcessing}
+                onClick={() => {
+                  navigate(`/processing/${bookId}`)
+                  unitsMutation.mutate()
+                }}
+              >
+                {isProcessing ? 'Üniteler oluşuyor…' : 'Konuları oluştur'}
+              </button>
+            )}
+          </div>
+          {unitError && <div className="alert-error mt-3 text-sm">{unitError}</div>}
         </div>
         <div className="progress-track max-w-sm">
           <div className="progress-fill" style={{ width: `${progress}%` }} />
@@ -143,8 +187,27 @@ export default function BookPage() {
             </li>
           ))}
           {chapters.length === 0 && (
-            <li className="muted px-2 py-6 text-center text-sm">
-              Ünite henüz yok.
+            <li className="space-y-3 px-2 py-6 text-center">
+              <p className="muted text-sm">
+                Ünite yok. PDF’den çalışmaya devam et — veya konuları AI ile
+                ayır.
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Link to={`/books/${bookId}/read`} className="btn-primary text-sm">
+                  PDF’ye dön
+                </Link>
+                <button
+                  type="button"
+                  className="btn-ghost text-sm"
+                  disabled={isProcessing}
+                  onClick={() => {
+                    navigate(`/processing/${bookId}`)
+                    unitsMutation.mutate()
+                  }}
+                >
+                  {isProcessing ? 'Oluşuyor…' : 'Konuları oluştur'}
+                </button>
+              </div>
             </li>
           )}
         </ul>

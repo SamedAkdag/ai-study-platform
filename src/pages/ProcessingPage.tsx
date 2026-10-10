@@ -34,10 +34,20 @@ export default function ProcessingPage() {
   })
 
   useEffect(() => {
-    if (bookQuery.data?.status === 'ready' && bookId) {
-      navigate(`/books/${bookId}`, { replace: true })
+    if (!bookQuery.data || !bookId) return
+    if (bookQuery.data.status !== 'ready') return
+    // PDF-first imports use progress_step=imported; don't bounce those here.
+    if (bookQuery.data.progress_step === 'imported') {
+      navigate(`/books/${bookId}/read`, { replace: true })
+      return
     }
-  }, [bookQuery.data?.status, bookId, navigate])
+    navigate(`/books/${bookId}`, { replace: true })
+  }, [
+    bookQuery.data?.status,
+    bookQuery.data?.progress_step,
+    bookId,
+    navigate,
+  ])
 
   const step = bookQuery.data?.progress_step || 'extracting'
   const stepIndex = Math.max(
@@ -57,9 +67,9 @@ export default function ProcessingPage() {
             {bookQuery.data?.title || 'Kitabın işleniyor…'}
           </h1>
           <p className="muted mt-3 text-sm leading-relaxed">
-            MiMo üniteleri ayırırken <strong>bu sekmeyi açık tut</strong>.
-            Kapanırsa işlem yarıda kalabilir; sonra kitaptan kaldığın yerden
-            devam edebilirsin. Hata olursa gerçek mesaj aşağıda görünür.
+            Üniteler ayrılırken <strong>bu sekmeyi açık tut</strong>. Bitince
+            ünite listesine geçersin. PDF okumaya dönmek için kitaplıktan
+            açabilirsin.
           </p>
         </header>
 

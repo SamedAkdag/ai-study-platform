@@ -455,6 +455,8 @@ export async function llmCompleteJson(opts: {
   temperature?: number
   maxTokens?: number
   retries?: number
+  /** Skip the second LLM "fix JSON" call (saves CPU/mem on Edge). */
+  skipRepairCall?: boolean
 }): Promise<{ value: Record<string, unknown>; provider: LlmResult['provider'] }> {
   const retries = opts.retries ?? 2
   let lastErr: Error = new Error('AI response was not valid JSON')
@@ -476,6 +478,7 @@ export async function llmCompleteJson(opts: {
         throw new Error('JSON root was not an object')
       } catch (parseErr) {
         lastErr = parseErr instanceof Error ? parseErr : new Error(String(parseErr))
+        if (opts.skipRepairCall) throw lastErr
         // One repair call before next full regenerate
         const { text: repaired } = await llmComplete({
           messages: [
@@ -486,12 +489,12 @@ export async function llmCompleteJson(opts: {
             },
             {
               role: 'user',
-              content: `Fix into valid JSON object:\n${text.slice(0, 12000)}`,
+              content: `Fix into valid JSON object:\n${text.slice(0, 8000)}`,
             },
           ],
           json: true,
           temperature: 0,
-          maxTokens: Math.min(opts.maxTokens ?? 3000, 3500),
+          maxTokens: Math.min(opts.maxTokens ?? 3000, 2800),
         })
         const value = safeParseJson(repaired) as Record<string, unknown>
         if (value && typeof value === 'object' && !Array.isArray(value)) {

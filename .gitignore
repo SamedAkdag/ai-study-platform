@@ -28,5 +28,9 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Python OCR service
+ocr-service/.venv/
+ocr-service/__pycache__/
+
 # Supabase
 supabase/.temp

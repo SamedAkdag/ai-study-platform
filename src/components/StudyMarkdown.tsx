@@ -1,11 +1,19 @@
 import type { ReactNode } from 'react'
-import { useRef } from 'react'
-import ReactMarkdown from 'react-markdown'
+import { useMemo, useRef } from 'react'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import { isAiNoteBlockquote } from '@/lib/aiNotes'
 import { normalizeMarkdownTables } from '@/lib/normalizeMarkdownTables'
+
+/** OCR tablo klipleri data: URL olarak gelir — varsayılan transform bunları düşürür. */
+function studyUrlTransform(url: string): string {
+  if (/^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,/i.test(url)) {
+    return url
+  }
+  return defaultUrlTransform(url)
+}
 
 type Props = {
   markdown: string
@@ -35,9 +43,47 @@ function flattenText(node: ReactNode): string {
   return ''
 }
 
+/**
+ * `<!-- study:boxes -->` işaretlerini kaldır; sıradaki tablolar için kuyruk üret.
+ */
+function stripBoxMarkers(md: string): { text: string; boxFlags: boolean[] } {
+  const lines = String(md || '').split(/\r?\n/)
+  const out: string[] = []
+  const boxFlags: boolean[] = []
+  let nextBoxes = false
+  let inTable = false
+
+  for (const line of lines) {
+    const t = (line ?? '').trim()
+    if (/<!--\s*study:boxes\s*-->/.test(t)) {
+      nextBoxes = true
+      continue
+    }
+    const isSep =
+      t.includes('|') &&
+      /^[\s|:–—-]+$/.test(t) &&
+      /-/.test(t)
+    const isRow = /^\|.+\|/.test(t) && !isSep
+
+    if (isRow && !inTable) {
+      boxFlags.push(nextBoxes)
+      nextBoxes = false
+      inTable = true
+    } else if (inTable && t === '') {
+      inTable = false
+    } else if (inTable && !isRow && !isSep) {
+      inTable = false
+    }
+
+    out.push(line ?? '')
+  }
+
+  return { text: out.join('\n'), boxFlags }
+}
+
 /** Map blockquote lead labels → textbook callout chrome. */
 export function calloutKindFromText(text: string): CalloutKind {
-  const t = text.trim()
+  const t = String(text || '').trim()
   if (isAiNoteBlockquote(t)) return 'note'
   if (/^(benzetme|analoji|örnekle)\b/i.test(t)) return 'analogy'
   if (/^(dikkat|uyan|yanılgı|sık hata|yanlış)\b/i.test(t)) return 'warning'
@@ -63,8 +109,18 @@ function calloutClass(kind: CalloutKind): string {
  * Study content markdown — GFM tables, KaTeX, Pearson-like callouts.
  */
 export default function StudyMarkdown({ markdown, compact }: Props) {
-  const source = normalizeMarkdownTables(markdown)
+  const prepared = useMemo(() => {
+    const stripped = stripBoxMarkers(markdown || '')
+    return {
+      text: normalizeMarkdownTables(stripped.text),
+      boxFlags: stripped.boxFlags,
+    }
+  }, [markdown])
+
   const nextTableExam = useRef(false)
+  const boxFlagIdx = useRef(0)
+  // Reset index each render so table components read flags in order
+  boxFlagIdx.current = 0
 
   return (
     <div
@@ -77,17 +133,54 @@ export default function StudyMarkdown({ markdown, compact }: Props) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
+        urlTransform={studyUrlTransform}
         components={{
+          img: ({ src, alt }) => (
+            <figure className="study-md__figure-wrap">
+              <img
+                src={src}
+                alt={alt || 'Tablo'}
+                className="study-md__figure"
+                loading="lazy"
+              />
+              {alt && alt !== 'Tablo' && alt !== 'Şekil' && alt !== 'Gösterge' ? (
+                <figcaption className="study-md__figcaption">{alt}</figcaption>
+              ) : null}
+            </figure>
+          ),
+          h1: ({ children }) => (
+            <h1 className="study-h study-h--1">{children}</h1>
+          ),
           h2: ({ children }) => {
             const text = flattenText(children)
             const isExam = /sınav\s*kart/i.test(text)
             nextTableExam.current = isExam
             return (
-              <h2 className={isExam ? 'study-exam-heading' : undefined}>
+              <h2
+                className={
+                  isExam
+                    ? 'study-h study-h--2 study-exam-heading'
+                    : 'study-h study-h--2'
+                }
+              >
                 {children}
               </h2>
             )
           },
+          h3: ({ children }) => (
+            <h3 className="study-h study-h--3">{children}</h3>
+          ),
+          h4: ({ children }) => (
+            <h4 className="study-h study-h--4">{children}</h4>
+          ),
+          p: ({ children }) => <p className="study-p">{children}</p>,
+          ul: ({ children }) => (
+            <ul className="study-list study-list--ul">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="study-list study-list--ol">{children}</ol>
+          ),
+          hr: () => <hr className="study-rule" />,
           blockquote: ({ children }) => {
             const text = flattenText(children)
             const kind = calloutKindFromText(text)
@@ -98,15 +191,21 @@ export default function StudyMarkdown({ markdown, compact }: Props) {
           table: ({ children }) => {
             const exam = nextTableExam.current
             nextTableExam.current = false
+            const flagged = prepared.boxFlags[boxFlagIdx.current] === true
+            boxFlagIdx.current += 1
+            // Yalnızca açıkça işaretli kutu tabloları — kısa hücre tahmini yapma
+            const boxes = flagged
+            const wrapClass = exam
+              ? 'study-table-wrap study-table-wrap--exam'
+              : boxes
+                ? 'study-table-wrap study-table-wrap--boxes'
+                : 'study-table-wrap'
+            const tableClass = boxes
+              ? 'study-table study-table--boxes'
+              : 'study-table'
             return (
-              <div
-                className={
-                  exam
-                    ? 'study-table-wrap study-table-wrap--exam'
-                    : 'study-table-wrap'
-                }
-              >
-                <table className="study-table">{children}</table>
+              <div className={wrapClass}>
+                <table className={tableClass}>{children}</table>
               </div>
             )
           },
@@ -117,7 +216,7 @@ export default function StudyMarkdown({ markdown, compact }: Props) {
           td: ({ children }) => <td>{children}</td>,
         }}
       >
-        {source}
+        {prepared.text}
       </ReactMarkdown>
     </div>
   )

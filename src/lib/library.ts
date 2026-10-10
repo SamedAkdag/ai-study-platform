@@ -103,9 +103,9 @@ export function libraryHref(item: {
   ) {
     return `/s/${item.shareToken}`
   }
-  if (item.source === 'mine') return `/books/${item.bookId}`
+  if (item.source === 'mine') return `/books/${item.bookId}/read`
   if (item.shareToken) return `/s/${item.shareToken}`
-  return `/books/${item.bookId}`
+  return `/books/${item.bookId}/read`
 }
 
 export async function fetchMyLibrary(userId?: string | null): Promise<LibraryItem[]> {
@@ -129,7 +129,7 @@ export async function fetchMyLibrary(userId?: string | null): Promise<LibraryIte
         shareToken: b.share_token,
         isPublic: !!b.is_public,
         source: 'mine',
-        href: `/books/${b.id}`,
+        href: `/books/${b.id}/read`,
         addedAt: b.created_at,
       })
     }

@@ -3,11 +3,11 @@
  * Inserts a |---|---| separator after a header row when missing.
  */
 export function normalizeMarkdownTables(markdown: string): string {
-  const lines = markdown.split(/\r?\n/)
+  const lines = String(markdown || '').split(/\r?\n/)
   const out: string[] = []
 
   for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i]!
+    const line = lines[i] ?? ''
     out.push(line)
 
     if (!isTableRow(line)) continue
@@ -16,7 +16,7 @@ export function normalizeMarkdownTables(markdown: string): string {
     if (!next || !isTableRow(next)) continue
     if (isSeparatorRow(next)) continue
     // header + data without separator
-    if (isTableRow(after) || after === undefined || after.trim() === '') {
+    if (after === undefined || !String(after).trim() || isTableRow(after)) {
       const cols = splitCells(line).length
       if (cols >= 2) {
         out.push(makeSeparator(cols))
@@ -27,8 +27,11 @@ export function normalizeMarkdownTables(markdown: string): string {
   return out.join('\n')
 }
 
-function isTableRow(line: string): boolean {
-  const t = line.trim()
+function isTableRow(line: string | undefined): boolean {
+  if (line == null) return false
+  const t = String(line).trim()
+  // Markdown görselleri (özellikle data URL) tablo sanılmasın
+  if (/^!\[[^\]]*\]\(/.test(t)) return false
   if (!t.includes('|')) return false
   // Reject plain prose that happens to contain a pipe
   if (!/^\|?.+\|/.test(t)) return false
@@ -36,22 +39,23 @@ function isTableRow(line: string): boolean {
   return cells.length >= 2
 }
 
-function isSeparatorRow(line: string): boolean {
-  const t = line.trim()
+function isSeparatorRow(line: string | undefined): boolean {
+  if (line == null) return false
+  const t = String(line).trim()
   if (!t.includes('|') && !t.includes('-')) return false
   const cells = splitCells(t)
   if (cells.length < 2) {
     // |---|---| form
     return /^\|?[\s:|-]+\|?$/.test(t) && /-/.test(t)
   }
-  return cells.every((c) => /^:?-{3,}:?$/.test(c.trim()))
+  return cells.every((c) => /^:?-{3,}:?$/.test(String(c ?? '').trim()))
 }
 
 function splitCells(line: string): string[] {
-  let t = line.trim()
+  let t = String(line || '').trim()
   if (t.startsWith('|')) t = t.slice(1)
   if (t.endsWith('|')) t = t.slice(0, -1)
-  return t.split('|').map((c) => c.trim())
+  return t.split('|').map((c) => String(c ?? '').trim())
 }
 
 function makeSeparator(cols: number): string {

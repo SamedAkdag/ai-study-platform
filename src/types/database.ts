@@ -41,6 +41,25 @@ export type PageSource = {
   excerpt: string
 }
 
+export type MindMapBranch = {
+  label: string
+  children?: string[]
+}
+
+export type MindMapData = {
+  central: string
+  branches: MindMapBranch[]
+}
+
+/** AI-authored Stories flashcard (from practice generation). */
+export type FlashcardItem = {
+  /** Pedagogical role: hook | teach | concept | check | trap | summary */
+  role?: string
+  label?: string
+  front: string
+  back: string
+}
+
 export type Chapter = {
   id: string
   book_id: string
@@ -58,6 +77,8 @@ export type Chapter = {
   page_sources: PageSource[] | null
   examples: ExampleItem[] | null
   quiz: QuizItem[] | null
+  flashcards: FlashcardItem[] | null
+  mind_map: MindMapData | null
   page_text: string | null
   status: ChapterStatus
   created_at: string
@@ -220,6 +241,8 @@ export type Database = {
           page_sources?: PageSource[] | null
           examples?: ExampleItem[] | null
           quiz?: QuizItem[] | null
+          flashcards?: FlashcardItem[] | null
+          mind_map?: MindMapData | null
           page_text?: string | null
           status?: ChapterStatus
           created_at?: string
@@ -386,6 +409,8 @@ export type Database = {
           explanation_detailed: string | null
           examples: ExampleItem[] | null
           quiz: QuizItem[] | null
+          flashcards: FlashcardItem[] | null
+          mind_map: MindMapData | null
           status: string
         }
         Relationships: []

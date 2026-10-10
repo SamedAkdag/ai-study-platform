@@ -27,10 +27,21 @@ serve(async (req) => {
       typeof body?.message === 'string' && body.message.trim()
         ? body.message.trim()
         : 'Merhaba, kendini kısaca tanıtır mısın?'
+    const imageUrl =
+      typeof body?.image_url === 'string' && body.image_url.trim()
+        ? body.image_url.trim()
+        : ''
+
+    const userContent = imageUrl
+      ? [
+          { type: 'image_url' as const, image_url: { url: imageUrl } },
+          { type: 'text' as const, text: message },
+        ]
+      : message
 
     const text = await callMimo(
-      [{ role: 'user', content: message }],
-      { json: false, temperature: 0.7, maxTokens: 256 },
+      [{ role: 'user', content: userContent }],
+      { json: false, temperature: 0.2, maxTokens: 256 },
     )
 
     return new Response(
@@ -38,6 +49,7 @@ serve(async (req) => {
         ok: true,
         baseURL,
         model,
+        vision: !!imageUrl,
         reply: text,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },

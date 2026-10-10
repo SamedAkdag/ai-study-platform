@@ -3,7 +3,12 @@ import type { PageText, PageWindow } from './slidingWindow'
 import type { MergedChapter, WindowSegmentResult } from './mergeChapters'
 import { mergeWindowChapters } from './mergeChapters'
 import { sanitizeForPostgres } from './sanitize'
-import type { ExampleItem, QuizItem } from '@/types/database'
+import type {
+  ExampleItem,
+  FlashcardItem,
+  MindMapData,
+  QuizItem,
+} from '@/types/database'
 import { extractFunctionsError } from './functionsError'
 
 const MIN_WINDOW_CHARS = 120
@@ -241,35 +246,52 @@ export async function saveChapters(
   return data ?? []
 }
 
-/** Generate study materials for ONE chapter (on-demand when user opens it). */
+/** Generate study materials for ONE chapter (chunked edge invokes — CPU-safe). */
 export async function generateSingleChapterContent(input: {
   id: string
   title: string
   style?: string
 }) {
-  const { data, error } = await supabase.functions.invoke(
-    'generate-chapter-content',
-    {
-      body: {
-        chapter_id: input.id,
-        title: input.title,
-        style: input.style || undefined,
+  let chunkIndex = 0
+  let guard = 0
+  const maxLoops = 8
+
+  while (guard < maxLoops) {
+    guard += 1
+    const { data, error } = await supabase.functions.invoke(
+      'generate-chapter-content',
+      {
+        body: {
+          chapter_id: input.id,
+          title: input.title,
+          style: input.style || undefined,
+          chunk_index: chunkIndex,
+        },
       },
-    },
-  )
+    )
 
-  if (error) {
-    const detail = await extractFunctionsError(error, data)
-    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
-    throw new Error(detail)
+    if (error) {
+      const detail = await extractFunctionsError(error, data)
+      await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
+      throw new Error(detail)
+    }
+
+    if (data?.error) {
+      await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
+      throw new Error(String(data.error))
+    }
+
+    if (data?.done) return data
+
+    const next = Number(data?.next_chunk)
+    if (!Number.isFinite(next) || next <= chunkIndex) {
+      throw new Error('Üretim ilerlemesi alınamadı — tekrar dene')
+    }
+    chunkIndex = next
   }
 
-  if (data?.error) {
-    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
-    throw new Error(String(data.error))
-  }
-
-  return data
+  await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
+  throw new Error('Üretim çok uzun sürdü — tekrar dene')
 }
 
 export async function markBookReady(bookId: string) {
@@ -427,6 +449,8 @@ export type PublicChapter = {
   explanation_detailed: string | null
   examples: ExampleItem[] | null
   quiz: QuizItem[] | null
+  flashcards: FlashcardItem[] | null
+  mind_map: MindMapData | null
   status: string
 }
 
@@ -434,7 +458,7 @@ export async function fetchPublicChapters(bookId: string): Promise<PublicChapter
   const { data, error } = await supabase
     .from('public_shared_chapters')
     .select(
-      'id, book_id, chapter_number, order_index, title, summary, key_concepts, explanation, explanation_brief, explanation_detailed, examples, quiz, status',
+      'id, book_id, chapter_number, order_index, title, summary, key_concepts, explanation, explanation_brief, explanation_detailed, examples, quiz, flashcards, mind_map, status',
     )
     .eq('book_id', bookId)
     .order('order_index', { ascending: true })
@@ -449,7 +473,7 @@ export async function fetchPublicChapter(
   const { data, error } = await supabase
     .from('public_shared_chapters')
     .select(
-      'id, book_id, chapter_number, order_index, title, summary, key_concepts, explanation, explanation_brief, explanation_detailed, examples, quiz, status',
+      'id, book_id, chapter_number, order_index, title, summary, key_concepts, explanation, explanation_brief, explanation_detailed, examples, quiz, flashcards, mind_map, status',
     )
     .eq('id', chapterId)
     .eq('book_id', bookId)

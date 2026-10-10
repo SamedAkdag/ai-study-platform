@@ -2,9 +2,14 @@
 // Official example: base https://tokenharbor.ai/v1 , model mimo-v2.6-flash:free
 // Secrets: TOKENHARBOR_API_KEY (or TOKEN_HARBOR_API_KEY)
 
+/** OpenAI-style text or multimodal content parts (image_url + text). */
+export type MimoContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+
 export type MimoMessage = {
   role: 'system' | 'user' | 'assistant'
-  content: string
+  content: string | MimoContentPart[]
 }
 
 const DEFAULT_BASE = 'https://tokenharbor.ai/v1'

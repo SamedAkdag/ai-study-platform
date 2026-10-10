@@ -68,18 +68,18 @@ K1: maddeler + mümkünse mini tablo + 1 Benzetme; sınav kartı opsiyonel (2–
 
 Return VALID JSON only:
 {
-  "k3":"markdown, max ~3000 chars",
-  "k2":"markdown, max ~2000 chars",
-  "k1":"markdown, max ~800 chars",
+  "k3":"markdown, max ~1800 chars",
+  "k2":"markdown, max ~1200 chars",
+  "k1":"markdown, max ~500 chars",
   "topics":["en fazla 6 kısa konu etiketi"]
 }
-SOURCE dilinde (genelde Türkçe). Sayfaları kapsa. String içinde \\n ve LaTeX’te \\\\ kullan.`
+SOURCE dilinde (genelde Türkçe). Sayfaları kapsa. Kısa tut. String içinde \\n ve LaTeX’te \\\\ kullan.`
 }
 
 export function practiceSystemPrompt(): string {
   return `${TUTOR_PERSONA_TR}
 
-Görevin: ünite notlarından pratik materyal.
+Görevin: ünite notlarından pratik materyal + zihin haritası + pedagojik flash Stories destesi.
 ${TUTOR_RULES_TR}
 
 Return VALID JSON only:
@@ -97,9 +97,35 @@ Return VALID JSON only:
       "correct_index":0,
       "explanation":"Doğru neden + yanlış şık tuzakları (kısa)."
     }
-  ]
+  ],
+  "flashcards":[
+    {
+      "role":"hook|teach|concept|check|trap|summary",
+      "front":"ön yüz — kısa kanca / soru / kavram (max ~80 karakter)",
+      "back":"arka yüz — net anlatım veya cevap (1–3 kısa cümle)"
+    }
+  ],
+  "mind_map":{
+    "central":"ünitenin merkez başlığı",
+    "branches":[
+      {"label":"ana dal başlığı","children":["alt nokta veya kısa cümle", "…"]}
+    ]
+  }
 }
-2 örnek, 4 quiz. Formül gerekirse $...$ kullan. Notların dışına taşma.`
+2 örnek, 4 quiz, 8–10 flashcard (SIRALI mikro ders).
+
+mind_map: konunun iskeleti — kaç dal/alt nokta esnek; children kısa cümle olabilir.
+Anlamlı grupla, gereksiz tekrar yok; central ile dal etiketlerini kopyalama.
+
+Flashcard DESTESİ (zorunlu pedagoji — bu sırada üret):
+1) hook (1): “Neden önemli?” — merak / bağlam, öğretici.
+2) teach (2–3): KONU ANLATIMI dilimleri — “Nasıl çalışır / ne anlama gelir?”; front kısa başlık, back sade anlatım (öğrenci Stories’te okusun).
+3) concept (1–2): terim ↔ tanım (ezberlenebilir).
+4) check (2): soru ↔ cevap (kendini test; front soru, back doğru cevap + 1 ipucu).
+5) trap (1): sık yanılgı — front “Yanılgı: …”, back “Doğrusu: …”.
+6) summary (1): tek cümle kilit özet.
+
+Kurallar: her kart TEK fikir; teach kartları quiz gibi değil ANLATIM gibi olsun; check kartları gerçek soru olsun; tekrar yok; formül varsa $...$; notların dışına taşma.`
 }
 
 export function selectionTutorSystem(chapterTitle: string): string {

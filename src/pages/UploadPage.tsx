@@ -1,17 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { extractPdfText } from '@/lib/pdf'
-import { segmentStudyUnits } from '@/lib/segmentStudyUnits'
-import {
-  createBookRecord,
-  markBookFailed,
-  markBookReady,
-  saveChapters,
-} from '@/lib/api'
+import { cachePdfLocally } from '@/lib/pdfCache'
+import { rememberPdf } from '@/lib/pdfSession'
+import { startBackgroundBookImport } from '@/lib/bookImport'
+import { createBookRecord, markBookFailed } from '@/lib/api'
 import { supabase } from '@/lib/supabase'
+import { sanitizeForPostgres } from '@/lib/sanitize'
 import AppShell from '@/components/AppShell'
 import LibraryShelf from '@/components/LibraryShelf'
-import type { PageText } from '@/lib/slidingWindow'
 
 const MAX_MB = 50
 
@@ -23,47 +19,6 @@ function formatError(err: unknown): string {
     if (typeof o.message === 'string' && o.message.trim()) return o.message
   }
   return 'Bilinmeyen hata'
-}
-
-/** Runs outside the React tree so navigate/unmount cannot kill the pipeline. */
-async function processBookPipeline(input: {
-  bookId: string
-  bookTitle: string
-  pages: PageText[]
-}) {
-  const { bookId, bookTitle, pages } = input
-
-  await supabase
-    .from('books')
-    .update({ progress_step: 'analyzing', status: 'processing' })
-    .eq('id', bookId)
-
-  await supabase
-    .from('books')
-    .update({ progress_step: 'segmenting' })
-    .eq('id', bookId)
-
-  const units = await segmentStudyUnits({
-    bookTitle,
-    pages,
-    onProgress: async (p) => {
-      await supabase
-        .from('books')
-        .update({
-          progress_step: p.phase === 'error' ? 'segmenting' : 'segmenting',
-          error_message: p.message.slice(0, 1500),
-        })
-        .eq('id', bookId)
-    },
-  })
-
-  await supabase
-    .from('books')
-    .update({ progress_step: 'saving', error_message: null })
-    .eq('id', bookId)
-
-  await saveChapters(bookId, units, pages)
-  await markBookReady(bookId)
 }
 
 export default function UploadPage() {
@@ -88,39 +43,45 @@ export default function UploadPage() {
 
     setBusy(true)
     setError(null)
-    setPhase('PDF okunuyor…')
+    setPhase('Açılıyor…')
     let bookId: string | null = null
 
     try {
-      const extracted = await extractPdfText(file)
-      const bookTitle = title.trim() || extracted.title
+      // pdf.js çağırmadan önce kaydet + aç — tarayıcı gibi hızlı
+      const bookTitle = sanitizeForPostgres(
+        title.trim() || file.name.replace(/\.pdf$/i, '') || 'Untitled book',
+      )
 
-      setPhase('Kitap kaydı oluşturuluyor…')
+      setPhase('Kaydediliyor…')
       const created = await createBookRecord({
         title: bookTitle,
-        totalPages: extracted.totalPages,
+        totalPages: 0,
       })
       bookId = created.id
+
+      // Tek kopya → bellek + IndexedDB; okuma sayfası anında URL alsın
+      const blob = await cachePdfLocally(bookId, file)
+      rememberPdf(bookId, blob)
 
       await supabase
         .from('books')
         .update({
           subject: subject.trim() || null,
-          progress_step: 'extracting',
-          status: 'processing',
+          file_url: `local:${bookId}`,
+          progress_step: 'imported',
+          status: 'ready',
           error_message: null,
         })
         .eq('id', bookId)
 
-      navigate(`/processing/${bookId}`, { replace: true })
-
-      await processBookPipeline({
+      startBackgroundBookImport({
         bookId,
-        bookTitle,
-        pages: extracted.pages,
+        file,
+        subject: subject.trim() || null,
+        titleHint: bookTitle,
       })
 
-      navigate(`/books/${bookId}`, { replace: true })
+      navigate(`/books/${bookId}/read`, { replace: true })
     } catch (err) {
       const msg = formatError(err)
       if (bookId) await markBookFailed(bookId, msg)
@@ -136,10 +97,10 @@ export default function UploadPage() {
         <header className="fade-up space-y-3 text-center">
           <p className="section-label">Studium</p>
           <h1 className="font-display text-[2.35rem] font-semibold tracking-tight sm:text-4xl">
-            PDF yükle, çalışmaya başla
+            PDF’ni aç, hemen çalış
           </h1>
-          <p className="muted mx-auto max-w-sm text-[0.95rem] leading-relaxed">
-            Bir dosya seç. Üniteler hazır olunca listeden açıp oku.
+          <p className="muted mx-auto max-w-md text-[0.95rem] leading-relaxed">
+            Yükle — PDF saniyeler içinde açılır. Metin arka planda hazırlanır.
           </p>
         </header>
 

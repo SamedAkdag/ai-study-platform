@@ -22,6 +22,9 @@ export function friendlyAiError(err: unknown): string {
   const raw = asError(err).message || ''
   const lower = raw.toLowerCase()
 
+  if (/compute resources|worker_resource|546/i.test(lower)) {
+    return 'Sunucu bu ünite için yetersiz kaldı. Biraz sonra tekrar dene (daha kısa üniteler daha sorunsuz).'
+  }
   if (/not valid json|json parse|ai response was not valid/i.test(raw)) {
     return 'AI geçici olarak bozuk yanıt verdi. Bir kez daha dene — genelde ikinci denemede düzelir.'
   }
@@ -43,7 +46,7 @@ export function friendlyAiError(err: unknown): string {
 
 export function isRetryableAiError(err: unknown): boolean {
   const raw = asError(err).message.toLowerCase()
-  return /json|rate.?limit|429|timeout|timed out|meşgul|bozuk|network|fetch|failed to send/.test(
+  return /json|rate.?limit|429|timeout|timed out|meşgul|bozuk|network|fetch|failed to send|compute resources|546/.test(
     raw,
   )
 }

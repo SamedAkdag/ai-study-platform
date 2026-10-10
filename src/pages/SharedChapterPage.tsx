@@ -8,6 +8,7 @@ import GroupChatPanel from '@/components/GroupChatPanel'
 import ContributionComposer from '@/components/ContributionComposer'
 import ContributionReviewPanel from '@/components/ContributionReviewPanel'
 import MarkdownWithTts from '@/components/MarkdownWithTts'
+import MindMapPanel, { mindMapFromConcepts } from '@/components/MindMapPanel'
 import QuizPlayer from '@/components/QuizPlayer'
 import ShareStats from '@/components/ShareStats'
 import { useStudySession } from '@/hooks/useStudySession'
@@ -84,6 +85,12 @@ export default function SharedChapterPage() {
     }
     return ch.explanation || ''
   }, [ch, depth])
+
+  const mindMap = useMemo(() => {
+    if (!ch) return null
+    if (ch.mind_map?.branches?.length) return ch.mind_map
+    return mindMapFromConcepts(ch.title, ch.key_concepts ?? [])
+  }, [ch])
 
   if (bookQuery.isLoading || chapterQuery.isLoading) {
     return (
@@ -170,6 +177,13 @@ export default function SharedChapterPage() {
       <section className="surface-panel p-5 sm:p-7">
         {tab === 'explanation' && (
           <div className="space-y-4">
+            {mindMap ? (
+              <MindMapPanel
+                data={mindMap}
+                title={ch.title}
+                markdown={markdown}
+              />
+            ) : null}
             <div className="flex flex-wrap gap-2">
               {depths.map((d) => (
                 <button
