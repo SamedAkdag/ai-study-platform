@@ -260,7 +260,7 @@ export default function ExplanationWithInlineChat({
   return (
     <div ref={wrapRef} className="relative">
       <p className="muted mb-3 text-xs leading-relaxed">
-        Seç → sor veya oku. Cevabı “Nota ekle” ile kaydedebilirsin.
+        Metni seç → sor veya sesli oku. Cevabı nota ekleyebilirsin.
       </p>
 
       <div className="mb-4">
@@ -341,7 +341,7 @@ export default function ExplanationWithInlineChat({
                 }}
                 className="btn-ghost !bg-white text-xs shadow-sm"
               >
-                Kaynak’ta bul
+                PDF’de bul
               </button>
             )}
           </div>

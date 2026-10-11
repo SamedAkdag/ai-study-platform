@@ -12,7 +12,7 @@ type Props = {
   wide?: boolean
   bookId?: string | null
   showBookTimer?: boolean
-  /** First-visit product tour (home). */
+  /** First-visit product tour only (no manual entry point). */
   autoTour?: boolean
 }
 
@@ -25,7 +25,6 @@ export default function AppShell({
 }: Props) {
   const { user, profile } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
-  const [tourOpen, setTourOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -42,7 +41,7 @@ export default function AppShell({
       className={`page-shell ${wide ? 'max-w-none' : ''}`}
       style={wide ? { width: 'min(1280px, calc(100% - 1rem))' } : undefined}
     >
-      <header className="mb-7 flex flex-wrap items-center justify-between gap-3">
+      <header className="app-topbar mb-6 flex flex-wrap items-center justify-between gap-3">
         <Link to="/" className="brand-mark">
           <span aria-hidden />
           Studium
@@ -50,13 +49,6 @@ export default function AppShell({
         <nav className="flex flex-wrap items-center gap-0.5">
           <StudyTimerBadge bookId={bookId} showBook={showBookTimer} />
           <NotificationBell />
-          <button
-            type="button"
-            className="btn-ghost text-xs"
-            onClick={() => setTourOpen(true)}
-          >
-            Tur
-          </button>
           {user && (
             <div className="relative" ref={menuRef}>
               <button
@@ -109,11 +101,7 @@ export default function AppShell({
         </a>
       </footer>
 
-      {tourOpen ? (
-        <ProductTour open onClose={() => setTourOpen(false)} />
-      ) : autoTour ? (
-        <ProductTour auto />
-      ) : null}
+      {autoTour ? <ProductTour auto /> : null}
     </div>
   )
 }

@@ -38,7 +38,7 @@ import {
   roleAtLeast,
 } from '@/lib/studyGroup'
 
-/** Primary study IA — one job per mode (UX audit). */
+/** Source-first study IA: PDF work surface, then AI notes, then drills. */
 type StudyMode = 'read' | 'practice' | 'source'
 type Depth = 'brief' | 'standard' | 'detailed'
 type PracticePanel = 'flash' | 'quiz' | 'examples'
@@ -46,7 +46,7 @@ type PracticePanel = 'flash' | 'quiz' | 'examples'
 export default function ChapterPage() {
   const { bookId, chapterId } = useParams<{ bookId: string; chapterId: string }>()
   useStudySession(bookId, chapterId)
-  const [mode, setMode] = useState<StudyMode>('read')
+  const [mode, setMode] = useState<StudyMode>('source')
   const [depth, setDepth] = useState<Depth>('standard')
   const [practicePanel, setPracticePanel] = useState<PracticePanel>('flash')
   const [stylePref, setStylePref] = useState(
@@ -112,8 +112,9 @@ export default function ChapterPage() {
 
   const ready = chapterQuery.data?.status === 'ready' && !!chapterQuery.data.explanation
   useEffect(() => {
+    // Stay on PDF while notes generate; without PDF fall back to Anlatım
+    if (!hasPdf && mode === 'source') setMode(ready ? 'read' : 'source')
     if (!ready && hasPdf && mode !== 'source') setMode('source')
-    if (ready && mode === 'source' && !hasPdf) setMode('read')
   }, [ready, hasPdf, mode])
 
   const generateMutation = useMutation({
@@ -176,16 +177,16 @@ export default function ChapterPage() {
       ch.status === 'failed' ||
       (!ch.explanation && ch.status !== 'generating'))
 
-  const depths: { id: Depth; label: string; hint: string }[] = [
-    { id: 'brief', label: 'K1', hint: 'özet' },
-    { id: 'standard', label: 'K2', hint: 'detay' },
-    { id: 'detailed', label: 'K3', hint: 'full' },
+  const depths: { id: Depth; label: string }[] = [
+    { id: 'brief', label: 'Özet' },
+    { id: 'standard', label: 'Genel' },
+    { id: 'detailed', label: 'Detay' },
   ]
 
   const modes: { id: StudyMode; label: string }[] = [
-    { id: 'read', label: 'Oku' },
-    { id: 'practice', label: 'Çalış' },
-    { id: 'source', label: 'Kaynak' },
+    { id: 'source', label: 'PDF' },
+    { id: 'read', label: 'Anlatım' },
+    { id: 'practice', label: 'Alıştır' },
   ]
 
   function showInBook(selected: string) {
@@ -233,21 +234,22 @@ export default function ChapterPage() {
 
   const readBody =
     ready && ch ? (
-      <div className="space-y-5">
-        <div className="mode-segment" role="tablist" aria-label="Derinlik">
-          {depths.map((d) => (
-            <button
-              key={d.id}
-              type="button"
-              role="tab"
-              aria-selected={depth === d.id}
-              onClick={() => setDepth(d.id)}
-              className={`chip ${depth === d.id ? 'chip-active' : 'chip-idle'}`}
-            >
-              {d.label}
-              <span className="ml-1 opacity-70">({d.hint})</span>
-            </button>
-          ))}
+      <div className="chapter-read">
+        <div className="chapter-read__toolbar">
+          <div className="mode-segment" role="tablist" aria-label="Derinlik">
+            {depths.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                role="tab"
+                aria-selected={depth === d.id}
+                onClick={() => setDepth(d.id)}
+                className={`chip ${depth === d.id ? 'chip-active' : 'chip-idle'}`}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {pdfSel && pdfMode && (
@@ -263,7 +265,7 @@ export default function ChapterPage() {
           />
         )}
 
-        <section className="surface-panel p-5 sm:p-7">
+        <section className="chapter-prose surface-panel p-5 sm:p-8">
           {!markdownForDepth ? (
             <p className="muted text-sm">
               Bu seviye henüz yok. Menüden içeriği yenileyebilirsin.
@@ -284,13 +286,11 @@ export default function ChapterPage() {
           )}
 
           {bookHits.length > 0 && (
-            <div className="mt-4 rounded-xl border px-4 py-3" style={{ borderColor: 'rgba(154, 123, 79, 0.35)', background: 'rgba(154, 123, 79, 0.1)' }}>
-              <p className="text-xs font-semibold" style={{ color: 'var(--gold)' }}>
-                Seçimin kitapta olabilecek yerleri
-              </p>
+            <div className="book-hits mt-5">
+              <p className="book-hits__label">PDF’de olabilecek yerler</p>
               <ul className="mt-2 space-y-2">
                 {bookHits.map((h, i) => (
-                  <li key={i} className="text-xs" style={{ color: 'var(--ink)' }}>
+                  <li key={i} className="book-hits__item">
                     <span className="font-semibold">s. {h.page}</span>
                     <p className="mt-0.5 whitespace-pre-wrap opacity-90">
                       …{h.excerpt}…
@@ -303,29 +303,24 @@ export default function ChapterPage() {
         </section>
 
         {mindMap ? (
-          <details className="mind-map-disclosure">
-            <summary className="mind-map-disclosure__summary">
-              Konu haritası
-            </summary>
-            <div className="mt-3">
-              <MindMapPanel
-                data={mindMap}
-                title={ch.title}
-                markdown={markdownForDepth || ch.explanation}
-              />
-            </div>
-          </details>
+          <section className="chapter-map" aria-label="Konu haritası">
+            <MindMapPanel
+              data={mindMap}
+              title={ch.title}
+              markdown={markdownForDepth || ch.explanation}
+            />
+          </section>
         ) : null}
       </div>
     ) : null
 
   const practiceBody =
     ready && ch ? (
-      <div className="space-y-4">
-        <div className="mode-segment" role="tablist" aria-label="Çalış paneli">
+      <div className="chapter-practice">
+        <div className="mode-segment" role="tablist" aria-label="Alıştır paneli">
           {(
             [
-              ['flash', 'Flash Stories'],
+              ['flash', 'Flash'],
               ['quiz', 'Quiz'],
               ['examples', 'Örnekler'],
             ] as const
@@ -344,26 +339,26 @@ export default function ChapterPage() {
         </div>
 
         {practicePanel === 'flash' && (
-          <div className="practice-hero space-y-3">
-            <p className="font-display text-xl font-semibold tracking-tight">
+          <div className="practice-hero">
+            <p className="practice-hero__eyebrow">Mikro ders</p>
+            <p className="font-display text-2xl font-semibold tracking-tight">
               Flash Stories
             </p>
-            <p className="muted text-sm leading-relaxed">
-              Instagram tarzı mikro ders: ısın → anlatım → soru → özet. Sesli okuma
-              açık.
+            <p className="muted mt-2 max-w-md text-sm leading-relaxed">
+              Kısa kartlarla ısın, öğren, soru çöz. Sesli okuma açık.
             </p>
             <button
               type="button"
-              className="btn-primary"
+              className="btn-primary mt-4"
               onClick={() => setFlashOpen(true)}
             >
-              Stories’i başlat
+              Başlat
             </button>
           </div>
         )}
 
         {practicePanel === 'quiz' && (
-          <section className="surface-panel p-5 sm:p-7">
+          <section className="surface-panel p-5 sm:p-8">
             <QuizPlayer
               quiz={ch.quiz ?? []}
               bookTitle={bookQuery.data?.title}
@@ -390,7 +385,7 @@ export default function ChapterPage() {
         )}
 
         {practicePanel === 'examples' && (
-          <section className="surface-panel p-5 sm:p-7">
+          <section className="surface-panel p-5 sm:p-8">
             <ExamplesPanel examples={ch.examples ?? []} />
           </section>
         )}
@@ -485,16 +480,16 @@ export default function ChapterPage() {
       bookId={bookId}
       showBookTimer
     >
-      <header className="mb-5 space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Link to={`/books/${bookId}`} className="btn-ghost">
-            ← Kitaba dön
+      <header className="chapter-hero">
+        <div className="chapter-toolbar">
+          <Link to={`/books/${bookId}`} className="btn-ghost chapter-toolbar__back">
+            ← Kitap
           </Link>
 
           {(ready || hasPdf) && (
-            <div className="mode-segment" role="tablist" aria-label="Çalışma modu">
+            <div className="mode-segment mode-segment--primary" role="tablist" aria-label="Çalışma modu">
               {modes
-                .filter((m) => ready || m.id === 'source')
+                .filter((m) => (m.id === 'source' ? hasPdf : ready))
                 .map((m) => (
                   <button
                     key={m.id}
@@ -514,12 +509,13 @@ export default function ChapterPage() {
             </div>
           )}
 
-          <div className="chapter-more ml-auto" ref={moreRef}>
+          <div className="chapter-more" ref={moreRef}>
             <button
               type="button"
               className="btn-ghost text-xs"
               onClick={() => setMoreOpen((v) => !v)}
               aria-expanded={moreOpen}
+              aria-label="Daha fazla"
             >
               ⋯
             </button>
@@ -565,15 +561,9 @@ export default function ChapterPage() {
           </div>
         </div>
 
-        <div>
-          <p className="section-label mb-2">Ünite</p>
-          <h1
-            className={`font-display font-semibold tracking-tight ${
-              mode === 'source'
-                ? 'text-2xl sm:text-3xl'
-                : 'text-3xl sm:text-4xl'
-            }`}
-          >
+        <div className={`chapter-hero__title ${mode === 'source' ? 'chapter-hero__title--compact' : ''}`}>
+          <p className="section-label mb-1.5">Ünite</p>
+          <h1 className="font-display font-semibold tracking-tight">
             {ch?.title || '…'}
           </h1>
           {ch?.summary && mode === 'source' && (
@@ -587,7 +577,7 @@ export default function ChapterPage() {
             </details>
           )}
           {ch?.summary && mode !== 'source' && (
-            <p className="muted mt-3 max-w-2xl text-sm leading-relaxed line-clamp-3">
+            <p className="muted mt-2.5 max-w-2xl text-sm leading-relaxed line-clamp-2">
               {ch.summary}
             </p>
           )}
@@ -600,7 +590,7 @@ export default function ChapterPage() {
             <p className="font-display text-xl font-semibold">İçerik üret</p>
             <p className="muted mx-auto mt-1.5 max-w-md text-sm">
               Anlatım, Flash kartlar, örnek ve quiz oluştur.
-              {hasPdf ? ' Bu arada Kaynak’tan PDF seçip AI’ya sorabilirsin.' : ''}
+              {hasPdf ? ' Bu arada PDF’de metin seçip AI’ya sorabilirsin.' : ''}
             </p>
           </div>
           <details className="text-sm">
@@ -647,7 +637,7 @@ export default function ChapterPage() {
                 className="btn-ghost text-xs"
                 onClick={() => setMode('source')}
               >
-                Şimdilik Kaynak / PDF’ye geç →
+                Şimdilik PDF’ye geç →
               </button>
             </p>
           )}
@@ -695,23 +685,27 @@ export default function ChapterPage() {
         <p className="muted text-sm">
           Notlar hazır değilse{' '}
           <button type="button" className="underline" onClick={() => setMode('source')}>
-            Kaynak
+            PDF
           </button>{' '}
-          modundan PDF ile çalışabilirsin.
+          üzerinden çalışabilirsin.
         </p>
       )}
 
       {(canWrite || membership) && groupQuery.data && ch && (
-        <div className="mt-6">
+        <div className="chapter-together mt-8">
           <button
             type="button"
-            className="btn-ghost text-sm"
+            className="chapter-together__toggle"
             onClick={() => setTogetherOpen((v) => !v)}
+            aria-expanded={togetherOpen}
           >
-            {togetherOpen ? 'Birlikte çalışmayı gizle' : 'Birlikte çalış'}
+            <span>Birlikte çalış</span>
+            <span className="muted text-xs">
+              {togetherOpen ? 'Gizle' : 'Grup · sohbet'}
+            </span>
           </button>
           {togetherOpen && (
-            <div className="mt-3 space-y-4">
+            <div className="mt-4 space-y-4">
               {membership && canWrite && (
                 <ContributionComposer
                   groupId={groupQuery.data.id}
@@ -763,8 +757,8 @@ function SourceSelectHint({ pendingNotes }: { pendingNotes?: boolean }) {
       </p>
       <p className="muted text-xs leading-relaxed">
         {pendingNotes
-          ? 'Ünite notları hazır olunca Oku / Çalış dolacak. Bu arada PDF üzerinden soru sorabilir veya alıntı alabilirsin.'
-          : 'Saklı sayfa kesiti yoksa (tarama/OCR) doğrudan PDF üzerinden çalış.'}
+          ? 'Ünite notları hazır olunca Anlatım / Alıştır dolacak. Bu arada PDF’de seç → sor, alıntı al veya işaretle.'
+          : 'Saklı sayfa kesiti yoksa (tarama/OCR) doğrudan PDF’de seçip çalış.'}
       </p>
     </div>
   )

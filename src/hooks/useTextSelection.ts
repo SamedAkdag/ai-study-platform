@@ -16,6 +16,12 @@ export type TextSelectionContext = {
   rect: DOMRect
 }
 
+const PDF_SEL_CLASS = 'pdf-sel-hit'
+
+function normalizeWs(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
 function selectionRect(range: Range): DOMRect {
   const rects = range.getClientRects()
   for (let i = rects.length - 1; i >= 0; i--) {
@@ -25,18 +31,144 @@ function selectionRect(range: Range): DOMRect {
   return range.getBoundingClientRect()
 }
 
-export function readTextSelection(
+function rectsOverlap(
+  a: DOMRectReadOnly,
+  b: DOMRectReadOnly,
+  slop = 2,
+): boolean {
+  return (
+    a.left <= b.right + slop &&
+    a.right >= b.left - slop &&
+    a.top <= b.bottom + slop &&
+    a.bottom >= b.top - slop
+  )
+}
+
+function clearPdfSelMarks(root: HTMLElement) {
+  root.querySelectorAll(`.${PDF_SEL_CLASS}`).forEach((el) => {
+    el.classList.remove(PDF_SEL_CLASS)
+  })
+}
+
+function isPdfTextLayerRoot(root: HTMLElement): boolean {
+  return !!root.querySelector('.textLayer, .pdf-text-layer')
+}
+
+/**
+ * pdf.js absolute text-layer spans are often out of visual order in the DOM.
+ * Native Selection then highlights / stringifies unrelated spans between the
+ * drag start and end. Keep only spans that geometrically intersect the
+ * painted selection rects.
+ */
+function selectedTextGeometric(
   root: HTMLElement,
-): TextSelectionContext | null {
-  const sel = window.getSelection()
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null
+  range: Range,
+): { text: string; rect: DOMRect; spans: HTMLElement[] } | null {
+  const selRects = [...range.getClientRects()].filter(
+    (r) => r.width > 0.5 && r.height > 0.5,
+  )
+  if (!selRects.length) {
+    const text = normalizeWs(range.toString())
+    if (text.length < 3) return null
+    return { text, rect: selectionRect(range), spans: [] }
+  }
 
-  const range = sel.getRangeAt(0)
-  if (!root.contains(range.commonAncestorContainer)) return null
+  const layer =
+    (root.querySelector('.textLayer, .pdf-text-layer') as HTMLElement | null) ||
+    root
+  const spans = [...layer.querySelectorAll('span')] as HTMLElement[]
+  const hits: { el: HTMLElement; top: number; left: number; text: string }[] =
+    []
 
-  const selectedText = sel.toString().replace(/\s+/g, ' ').trim()
-  if (selectedText.length < 3) return null
+  for (const span of spans) {
+    if (span.classList.contains('is-omitted')) continue
+    const sr = span.getBoundingClientRect()
+    if (sr.width < 0.5 && sr.height < 0.5) continue
+    if (!selRects.some((r) => rectsOverlap(sr, r))) continue
 
+    let text = span.textContent || ''
+    const textNode = span.firstChild
+    if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+      if (
+        range.startContainer === textNode &&
+        range.endContainer === textNode
+      ) {
+        text = text.slice(range.startOffset, range.endOffset)
+      } else if (range.startContainer === textNode) {
+        text = text.slice(range.startOffset)
+      } else if (range.endContainer === textNode) {
+        text = text.slice(0, range.endOffset)
+      }
+    }
+    if (!text) continue
+    hits.push({ el: span, top: sr.top, left: sr.left, text })
+  }
+
+  if (!hits.length) {
+    const fallback = normalizeWs(range.toString())
+    if (fallback.length < 3) return null
+    return { text: fallback, rect: selectionRect(range), spans: [] }
+  }
+
+  hits.sort((a, b) => a.top - b.top || a.left - b.left)
+
+  let out = ''
+  let prev: (typeof hits)[0] | null = null
+  for (const h of hits) {
+    if (!prev) {
+      out = h.text
+    } else {
+      const prevBox = prev.el.getBoundingClientRect()
+      const newLine = h.top - prev.top > Math.max(prevBox.height, 4) * 0.55
+      const gap = h.left - (prev.left + prevBox.width)
+      if (newLine || (gap > 3 && !/\s$/.test(out) && !/^\s/.test(h.text))) {
+        out += ' '
+      }
+      out += h.text
+    }
+    prev = h
+  }
+
+  const text = normalizeWs(out)
+  if (text.length < 3) return null
+
+  const last = hits[hits.length - 1]
+  const union = new DOMRect(
+    Math.min(...hits.map((h) => h.left)),
+    Math.min(...hits.map((h) => h.top)),
+    0,
+    0,
+  )
+  const maxRight = Math.max(
+    ...hits.map((h) => h.el.getBoundingClientRect().right),
+  )
+  const maxBottom = Math.max(
+    ...hits.map((h) => h.el.getBoundingClientRect().bottom),
+  )
+  const rect = new DOMRect(
+    union.x,
+    union.y,
+    maxRight - union.x,
+    maxBottom - union.y,
+  )
+
+  // Prefer bottom-left of last hit for toolbar anchor (feels like selection end)
+  const anchor = last.el.getBoundingClientRect()
+  const toolbarRect = new DOMRect(
+    anchor.left,
+    anchor.bottom,
+    Math.max(rect.width, 1),
+    1,
+  )
+
+  return {
+    text,
+    rect: toolbarRect,
+    spans: hits.map((h) => h.el),
+  }
+}
+
+function contextAround(root: HTMLElement, range: Range) {
   const preRange = document.createRange()
   preRange.selectNodeContents(root)
   preRange.setEnd(range.startContainer, range.startOffset)
@@ -56,9 +188,40 @@ export function readTextSelection(
     .filter(Boolean)
 
   return {
-    selectedText,
     precedingContext: beforeLines.slice(-20).join('\n'),
     followingContext: afterLines.slice(0, 20).join('\n'),
+  }
+}
+
+export function readTextSelection(
+  root: HTMLElement,
+): TextSelectionContext | null {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null
+
+  const range = sel.getRangeAt(0)
+  if (!root.contains(range.commonAncestorContainer)) return null
+
+  if (isPdfTextLayerRoot(root)) {
+    const geo = selectedTextGeometric(root, range)
+    if (!geo) return null
+    const ctx = contextAround(root, range)
+    return {
+      selectedText: geo.text,
+      precedingContext: ctx.precedingContext,
+      followingContext: ctx.followingContext,
+      rect: geo.rect,
+    }
+  }
+
+  // Prose / markdown: stick to the live Range (not multi-range sel.toString)
+  const selectedText = normalizeWs(range.toString())
+  if (selectedText.length < 3) return null
+  const ctx = contextAround(root, range)
+  return {
+    selectedText,
+    precedingContext: ctx.precedingContext,
+    followingContext: ctx.followingContext,
     rect: selectionRect(range),
   }
 }
@@ -69,6 +232,9 @@ export function readTextSelection(
  * Keeps the last valid selection pinned until an outside tap or clear(),
  * so collapsing the native selection when pressing the action bar does not
  * unmount the buttons before the action runs.
+ *
+ * For pdf.js text layers, finalizes with geometric filtering and paints
+ * `.pdf-sel-hit` marks so the highlight matches what was actually chosen.
  */
 export function useTextSelection(
   rootRef: RefObject<HTMLElement | null>,
@@ -79,6 +245,7 @@ export function useTextSelection(
   const timerRef = useRef(0)
   const pinnedRef = useRef<TextSelectionContext | null>(null)
   const holdingRef = useRef(false)
+  const draggingRef = useRef(false)
 
   const applyCtx = useCallback((next: TextSelectionContext | null) => {
     pinnedRef.current = next
@@ -92,25 +259,83 @@ export function useTextSelection(
 
   const clear = useCallback(() => {
     holdingRef.current = false
+    draggingRef.current = false
     window.clearTimeout(timerRef.current)
     pinnedRef.current = null
+    const root = rootRef.current
+    if (root) clearPdfSelMarks(root)
     setCtx(null)
-  }, [])
+  }, [rootRef])
 
   /** Snapshot for actions — survives collapse after toolbar press. */
   const snapshot = useCallback((): TextSelectionContext | null => {
     return pinnedRef.current
   }, [])
 
+  const finalizeSelection = useCallback(() => {
+    const root = rootRef.current
+    if (!root) return
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      if (!holdingRef.current) {
+        clearPdfSelMarks(root)
+        applyCtx(null)
+      }
+      return
+    }
+    const range = sel.getRangeAt(0)
+    if (!root.contains(range.commonAncestorContainer)) {
+      if (!holdingRef.current) {
+        clearPdfSelMarks(root)
+        applyCtx(null)
+      }
+      return
+    }
+
+    if (isPdfTextLayerRoot(root)) {
+      const geo = selectedTextGeometric(root, range)
+      clearPdfSelMarks(root)
+      if (!geo) {
+        applyCtx(null)
+        return
+      }
+      geo.spans.forEach((el) => el.classList.add(PDF_SEL_CLASS))
+      const around = contextAround(root, range)
+      applyCtx({
+        selectedText: geo.text,
+        precedingContext: around.precedingContext,
+        followingContext: around.followingContext,
+        rect: geo.rect,
+      })
+      // Drop native multi-span paint; our marks show the true selection
+      sel.removeAllRanges()
+      return
+    }
+
+    const next = readTextSelection(root)
+    applyCtx(next)
+  }, [applyCtx, rootRef])
+
   useEffect(() => {
+    const onPointerDown = (e: Event) => {
+      const target = e.target
+      if (target instanceof Element && target.closest(ignoreSelector)) return
+      draggingRef.current = true
+    }
+
     const onSelectionChange = () => {
       if (holdingRef.current) return
+      // While dragging on a PDF layer, skip intermediate DOM-order noise
+      const root = rootRef.current
+      if (root && isPdfTextLayerRoot(root) && draggingRef.current) return
+
       window.clearTimeout(timerRef.current)
       timerRef.current = window.setTimeout(() => {
-        const root = rootRef.current
-        if (!root) return
-        const next = readTextSelection(root)
-        // Only upgrade / refresh — never auto-dismiss on collapse (mobile tap).
+        if (holdingRef.current) return
+        const el = rootRef.current
+        if (!el) return
+        if (isPdfTextLayerRoot(el)) return // wait for pointerup
+        const next = readTextSelection(el)
         if (next) applyCtx(next)
       }, 80)
     }
@@ -118,18 +343,19 @@ export function useTextSelection(
     const onOutsidePointerUp = (e: Event) => {
       const target = e.target
       if (target instanceof Element && target.closest(ignoreSelector)) {
+        draggingRef.current = false
         return
       }
       holdingRef.current = false
+      draggingRef.current = false
       const delay = e.type === 'touchend' ? 220 : 30
       window.clearTimeout(timerRef.current)
       timerRef.current = window.setTimeout(() => {
-        const root = rootRef.current
-        const next = root ? readTextSelection(root) : null
-        applyCtx(next)
+        finalizeSelection()
       }, delay)
     }
 
+    document.addEventListener('pointerdown', onPointerDown, true)
     document.addEventListener('selectionchange', onSelectionChange)
     document.addEventListener('mouseup', onOutsidePointerUp)
     document.addEventListener('touchend', onOutsidePointerUp, {
@@ -138,11 +364,12 @@ export function useTextSelection(
 
     return () => {
       window.clearTimeout(timerRef.current)
+      document.removeEventListener('pointerdown', onPointerDown, true)
       document.removeEventListener('selectionchange', onSelectionChange)
       document.removeEventListener('mouseup', onOutsidePointerUp)
       document.removeEventListener('touchend', onOutsidePointerUp)
     }
-  }, [applyCtx, ignoreSelector, rootRef])
+  }, [applyCtx, finalizeSelection, ignoreSelector, rootRef])
 
   return { ctx, clear, hold, snapshot }
 }

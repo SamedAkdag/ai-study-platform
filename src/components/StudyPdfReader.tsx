@@ -223,8 +223,9 @@ export default function StudyPdfReader({
   const wrapRef = useRef<HTMLDivElement>(null)
   const mdHostRef = useRef<HTMLDivElement>(null)
 
+  // Select only body prose — not page title / repair hints
   const { ctx: selection, clear: clearSelection, hold, snapshot } =
-    useTextSelection(articleRef)
+    useTextSelection(mdHostRef)
 
   useEffect(() => {
     if (controlled) return

@@ -21,20 +21,20 @@ const STEPS: Step[] = [
   },
   {
     id: 'study',
-    title: 'Üç derinlikte oku',
-    body: 'Her ünite için özet (K1), detaylı özet (K2) ve full anlatım (K3). İhtiyacına göre seç.',
+    title: 'PDF üzerinden çalış',
+    body: 'Asıl iş kaynağın üzerinde: metni seç → sor, alıntı al, işaretle. Anlatım ve Alıştır yanında durur.',
     visual: 'study',
   },
   {
     id: 'ask',
     title: 'Anlamadığın yeri seç, AI’ya sor',
-    body: 'Metni seç → “Bu kısım hakkında sor”. Cevabı nota da ekleyebilirsin. Telefonda da çalışır.',
+    body: 'PDF veya anlatımda metni seç → AI’ya sor. Cevabı nota da ekleyebilirsin. Telefonda da çalışır.',
     visual: 'ask',
   },
   {
     id: 'quiz',
-    title: 'Quiz çöz, skorunu gör',
-    body: 'Mini quiz ile kendini kontrol et. Skoru kopyalayabilir veya gruba gönderebilirsin.',
+    title: 'Alıştır: Flash, quiz, örnek',
+    body: 'Mini quiz ve Flash Stories ile kendini kontrol et. Skoru kopyalayabilir veya gruba gönderebilirsin.',
     visual: 'quiz',
   },
   {
@@ -60,9 +60,9 @@ function TourVisual({ kind }: { kind: Step['visual'] }) {
     return (
       <div className="tour-visual" aria-hidden>
         <div className="tour-mock-chips">
-          <span className="tour-chip on">Özet</span>
-          <span className="tour-chip">Detaylı</span>
-          <span className="tour-chip">Full</span>
+          <span className="tour-chip on">PDF</span>
+          <span className="tour-chip">Anlatım</span>
+          <span className="tour-chip">Alıştır</span>
         </div>
         <div className="tour-mock-lines">
           <i />
@@ -102,7 +102,7 @@ function TourVisual({ kind }: { kind: Step['visual'] }) {
         <code>/s/····</code>
       </div>
       <div className="tour-mock-chips">
-        <span className="tour-chip on">Oku</span>
+        <span className="tour-chip on">Anlatım</span>
         <span className="tour-chip">Gruba katıl</span>
       </div>
     </div>

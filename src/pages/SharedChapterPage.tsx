@@ -118,14 +118,14 @@ export default function SharedChapterPage() {
   }
 
   const modes: { id: StudyMode; label: string }[] = [
-    { id: 'read', label: 'Oku' },
-    { id: 'practice', label: 'Çalış' },
+    { id: 'read', label: 'Anlatım' },
+    { id: 'practice', label: 'Alıştır' },
   ]
 
   const depths: { id: Depth; label: string }[] = [
-    { id: 'brief', label: 'K1' },
-    { id: 'standard', label: 'K2' },
-    { id: 'detailed', label: 'K3' },
+    { id: 'brief', label: 'Özet' },
+    { id: 'standard', label: 'Genel' },
+    { id: 'detailed', label: 'Detay' },
   ]
 
   return (
@@ -164,38 +164,40 @@ export default function SharedChapterPage() {
         )}
       </header>
 
-      <div className="mb-4 mode-segment" role="tablist" aria-label="Çalışma modu">
-        {modes.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            role="tab"
-            aria-selected={mode === m.id}
-            onClick={() => setMode(m.id)}
-            className={`chip ${mode === m.id ? 'chip-active' : 'chip-idle'}`}
-          >
-            {m.label}
-          </button>
-        ))}
+      <div className="chapter-toolbar mb-5">
+        <div className="mode-segment mode-segment--primary" role="tablist" aria-label="Çalışma modu">
+          {modes.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              role="tab"
+              aria-selected={mode === m.id}
+              onClick={() => setMode(m.id)}
+              className={`chip ${mode === m.id ? 'chip-active' : 'chip-idle'}`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <section className="surface-panel p-5 sm:p-7">
-        {mode === 'read' && (
-          <div className="space-y-4">
-            <div className="mode-segment" role="tablist" aria-label="Derinlik">
-              {depths.map((d) => (
-                <button
-                  key={d.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={depth === d.id}
-                  onClick={() => setDepth(d.id)}
-                  className={`chip ${depth === d.id ? 'chip-active' : 'chip-idle'}`}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
+      {mode === 'read' && (
+        <div className="chapter-read">
+          <div className="mode-segment" role="tablist" aria-label="Derinlik">
+            {depths.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                role="tab"
+                aria-selected={depth === d.id}
+                onClick={() => setDepth(d.id)}
+                className={`chip ${depth === d.id ? 'chip-active' : 'chip-idle'}`}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+          <section className="chapter-prose surface-panel p-5 sm:p-8">
             {markdown ? (
               canWrite ? (
                 <ExplanationWithInlineChat
@@ -215,44 +217,41 @@ export default function SharedChapterPage() {
             ) : (
               <p className="muted text-sm">Bu seviye için içerik yok.</p>
             )}
-            {mindMap ? (
-              <details className="mind-map-disclosure">
-                <summary className="mind-map-disclosure__summary">
-                  Konu haritası
-                </summary>
-                <div className="mt-3">
-                  <MindMapPanel
-                    data={mindMap}
-                    title={ch.title}
-                    markdown={markdown}
-                  />
-                </div>
-              </details>
-            ) : null}
-          </div>
-        )}
+          </section>
+          {mindMap ? (
+            <section className="chapter-map" aria-label="Konu haritası">
+              <MindMapPanel
+                data={mindMap}
+                title={ch.title}
+                markdown={markdown}
+              />
+            </section>
+          ) : null}
+        </div>
+      )}
 
-        {mode === 'practice' && (
-          <div className="space-y-4">
-            <div className="mode-segment" role="tablist" aria-label="Çalış paneli">
-              {(
-                [
-                  ['quiz', 'Quiz'],
-                  ['examples', 'Örnekler'],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={practicePanel === id}
-                  className={`chip ${practicePanel === id ? 'chip-active' : 'chip-idle'}`}
-                  onClick={() => setPracticePanel(id)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+      {mode === 'practice' && (
+        <div className="chapter-practice">
+          <div className="mode-segment" role="tablist" aria-label="Alıştır paneli">
+            {(
+              [
+                ['quiz', 'Quiz'],
+                ['examples', 'Örnekler'],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={practicePanel === id}
+                className={`chip ${practicePanel === id ? 'chip-active' : 'chip-idle'}`}
+                onClick={() => setPracticePanel(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <section className="surface-panel p-5 sm:p-8">
             {practicePanel === 'examples' && (
               <div className="space-y-5">
                 {(ch.examples ?? []).length === 0 && (
@@ -296,9 +295,9 @@ export default function SharedChapterPage() {
                 }
               />
             )}
-          </div>
-        )}
-      </section>
+          </section>
+        </div>
+      )}
 
       {(canWrite || membership) && (
         <div className="mt-6 space-y-4">
