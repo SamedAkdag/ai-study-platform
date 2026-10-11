@@ -115,7 +115,7 @@ export default function BookPage() {
           )}
           <div className="mt-3 flex flex-wrap gap-2">
             <Link to={`/books/${bookId}/read`} className="btn-primary text-sm">
-              PDF + AI oku
+              PDF’den oku
             </Link>
             {chapters.length === 0 && (
               <button

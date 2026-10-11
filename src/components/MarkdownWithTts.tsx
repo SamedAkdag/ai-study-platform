@@ -85,23 +85,7 @@ export default function MarkdownWithTts({ markdown }: Props) {
                 window.getSelection()?.removeAllRanges()
               }}
             >
-              Buradan oku
-            </button>
-            <button
-              type="button"
-              className="btn-ghost !bg-white text-xs shadow-sm"
-              onPointerDown={(e) => preserveSelectionOnPointerDown(e, hold)}
-              onPointerUp={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                const text =
-                  snapshot()?.selectedText ?? selBar.selectedText
-                tts.speakPlain(text)
-                clearSelection()
-                window.getSelection()?.removeAllRanges()
-              }}
-            >
-              Seçimi oku
+              Sesli oku
             </button>
           </div>
         </div>

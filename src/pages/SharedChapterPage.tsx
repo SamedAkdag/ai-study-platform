@@ -22,12 +22,14 @@ import {
 } from '@/lib/studyGroup'
 
 type Depth = 'brief' | 'standard' | 'detailed'
-type Tab = 'explanation' | 'examples' | 'quiz'
+type StudyMode = 'read' | 'practice'
+type PracticePanel = 'examples' | 'quiz'
 
 export default function SharedChapterPage() {
   const { token, chapterId } = useParams<{ token: string; chapterId: string }>()
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState<Tab>('explanation')
+  const [mode, setMode] = useState<StudyMode>('read')
+  const [practicePanel, setPracticePanel] = useState<PracticePanel>('quiz')
   const [depth, setDepth] = useState<Depth>('standard')
 
   const bookQuery = useQuery({
@@ -115,16 +117,15 @@ export default function SharedChapterPage() {
     )
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'explanation', label: 'Konu Anlatımı' },
-    { id: 'examples', label: 'Örnekler' },
-    { id: 'quiz', label: 'Quiz' },
+  const modes: { id: StudyMode; label: string }[] = [
+    { id: 'read', label: 'Oku' },
+    { id: 'practice', label: 'Çalış' },
   ]
 
   const depths: { id: Depth; label: string }[] = [
-    { id: 'brief', label: 'Hızlı özet' },
-    { id: 'standard', label: 'Genel' },
-    { id: 'detailed', label: 'Detay' },
+    { id: 'brief', label: 'K1' },
+    { id: 'standard', label: 'K2' },
+    { id: 'detailed', label: 'K3' },
   ]
 
   return (
@@ -161,21 +162,23 @@ export default function SharedChapterPage() {
         )}
       </header>
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {tabs.map((t) => (
+      <div className="mb-4 mode-segment" role="tablist" aria-label="Çalışma modu">
+        {modes.map((m) => (
           <button
-            key={t.id}
+            key={m.id}
             type="button"
-            onClick={() => setTab(t.id)}
-            className={`chip ${tab === t.id ? 'chip-active' : 'chip-idle'}`}
+            role="tab"
+            aria-selected={mode === m.id}
+            onClick={() => setMode(m.id)}
+            className={`chip ${mode === m.id ? 'chip-active' : 'chip-idle'}`}
           >
-            {t.label}
+            {m.label}
           </button>
         ))}
       </div>
 
       <section className="surface-panel p-5 sm:p-7">
-        {tab === 'explanation' && (
+        {mode === 'read' && (
           <div className="space-y-4">
             {mindMap ? (
               <MindMapPanel
@@ -184,11 +187,13 @@ export default function SharedChapterPage() {
                 markdown={markdown}
               />
             ) : null}
-            <div className="flex flex-wrap gap-2">
+            <div className="mode-segment" role="tablist" aria-label="Derinlik">
               {depths.map((d) => (
                 <button
                   key={d.id}
                   type="button"
+                  role="tab"
+                  aria-selected={depth === d.id}
                   onClick={() => setDepth(d.id)}
                   className={`chip ${depth === d.id ? 'chip-active' : 'chip-idle'}`}
                 >
@@ -218,49 +223,71 @@ export default function SharedChapterPage() {
           </div>
         )}
 
-        {tab === 'examples' && (
-          <div className="space-y-5">
-            {(ch.examples ?? []).length === 0 && (
-              <p className="muted">Örnek yok.</p>
-            )}
-            {(ch.examples ?? []).map((ex, i) => (
-              <div key={i}>
-                <p className="font-display font-semibold">
-                  Örnek {i + 1}: {ex.problem}
-                </p>
-                <ol className="muted mt-2 list-decimal space-y-1 pl-5 text-sm">
-                  {(ex.solution_steps ?? []).map((s, j) => (
-                    <li key={j}>{s}</li>
-                  ))}
-                </ol>
+        {mode === 'practice' && (
+          <div className="space-y-4">
+            <div className="mode-segment" role="tablist" aria-label="Çalış paneli">
+              {(
+                [
+                  ['quiz', 'Quiz'],
+                  ['examples', 'Örnekler'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={practicePanel === id}
+                  className={`chip ${practicePanel === id ? 'chip-active' : 'chip-idle'}`}
+                  onClick={() => setPracticePanel(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {practicePanel === 'examples' && (
+              <div className="space-y-5">
+                {(ch.examples ?? []).length === 0 && (
+                  <p className="muted">Örnek yok.</p>
+                )}
+                {(ch.examples ?? []).map((ex, i) => (
+                  <div key={i}>
+                    <p className="font-display font-semibold">
+                      Örnek {i + 1}: {ex.problem}
+                    </p>
+                    <ol className="muted mt-2 list-decimal space-y-1 pl-5 text-sm">
+                      {(ex.solution_steps ?? []).map((s, j) => (
+                        <li key={j}>{s}</li>
+                      ))}
+                    </ol>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-
-        {tab === 'quiz' && (
-          <QuizPlayer
-            quiz={ch.quiz ?? []}
-            bookTitle={bookQuery.data.title}
-            chapterTitle={ch.title}
-            onScored={(ok, total) => {
-              if (bookQuery.data?.id) {
-                markChapterQuiz(bookQuery.data.id, ch.id, ok, total)
-              }
-            }}
-            onShareScore={
-              membership && groupQuery.data
-                ? async (ok, total) => {
-                    await postGroupMessage({
-                      groupId: groupQuery.data!.id,
-                      chapterId: ch.id,
-                      member: membership,
-                      body: `Quiz skoru: ${ok}/${total} — “${ch.title}”`,
-                    })
+            )}
+            {practicePanel === 'quiz' && (
+              <QuizPlayer
+                quiz={ch.quiz ?? []}
+                bookTitle={bookQuery.data.title}
+                chapterTitle={ch.title}
+                onScored={(ok, total) => {
+                  if (bookQuery.data?.id) {
+                    markChapterQuiz(bookQuery.data.id, ch.id, ok, total)
                   }
-                : undefined
-            }
-          />
+                }}
+                onShareScore={
+                  membership && groupQuery.data
+                    ? async (ok, total) => {
+                        await postGroupMessage({
+                          groupId: groupQuery.data!.id,
+                          chapterId: ch.id,
+                          member: membership,
+                          body: `Quiz skoru: ${ok}/${total} — “${ch.title}”`,
+                        })
+                      }
+                    : undefined
+                }
+              />
+            )}
+          </div>
         )}
       </section>
 

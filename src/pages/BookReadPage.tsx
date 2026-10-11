@@ -249,17 +249,10 @@ export default function BookReadPage() {
     }
 
     if (action === 'extract') {
-      addPdfAnnotation(bookId, {
-        page: payload.page,
-        kind: 'extract',
-        quote: payload.selectedText,
-      })
-      void navigator.clipboard
-        ?.writeText(payload.selectedText)
-        .catch(() => undefined)
-      refreshNotes()
+      // Legacy “Alıntıla” → Cite draft (same destination)
+      setDraftNote(null)
+      setDraftCite({ payload })
       setMobilePane('notes')
-      flash('Alıntı panoya + notlara eklendi')
       return
     }
 

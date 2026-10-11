@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { pdfjsLib, ensurePdfWorker } from '@/lib/pdfjs'
-import {
-  preserveSelectionOnPointerDown,
-  useTextSelection,
-} from '@/hooks/useTextSelection'
+import { useTextSelection } from '@/hooks/useTextSelection'
 import type {
   PdfSelectionAction,
   PdfSelectionPayload,
 } from '@/types/pdfSelection'
 import PageJumpControl from '@/components/PageJumpControl'
+import SelectionActionBar from '@/components/SelectionActionBar'
 
 export type { PdfSelectionAction, PdfSelectionPayload }
 
@@ -210,9 +208,10 @@ export default function PdfViewer({
 
   const toolbar =
     selection && onAction ? (
-      <div
-        data-selection-toolbar
-        className="selection-action-bar selection-action-bar--float pdf-selection-bar"
+      <SelectionActionBar
+        preview={selection.selectedText}
+        hold={hold}
+        onAction={fire}
         style={{
           position: 'absolute',
           top: Math.max(
@@ -230,91 +229,7 @@ export default function PdfViewer({
           ),
           zIndex: 30,
         }}
-      >
-        <p className="selection-action-bar__preview">
-          {selection.selectedText.slice(0, 80)}
-          {selection.selectedText.length > 80 ? '…' : ''}
-        </p>
-        <div className="selection-action-bar__actions">
-          <button
-            type="button"
-            className="chip chip-active"
-            onPointerDown={preserveSelectionOnPointerDown}
-            onClick={() => {
-              hold()
-              fire('summarize')
-            }}
-          >
-            Özetle
-          </button>
-          <button
-            type="button"
-            className="chip chip-idle"
-            onPointerDown={preserveSelectionOnPointerDown}
-            onClick={() => {
-              hold()
-              fire('ask')
-            }}
-          >
-            AI’ya sor
-          </button>
-          <button
-            type="button"
-            className="chip chip-idle"
-            onPointerDown={preserveSelectionOnPointerDown}
-            onClick={() => {
-              hold()
-              fire('cite')
-            }}
-          >
-            Cite
-          </button>
-          <button
-            type="button"
-            className="chip chip-idle"
-            onPointerDown={preserveSelectionOnPointerDown}
-            onClick={() => {
-              hold()
-              fire('note')
-            }}
-          >
-            Benim notum
-          </button>
-          <button
-            type="button"
-            className="chip chip-idle"
-            onPointerDown={preserveSelectionOnPointerDown}
-            onClick={() => {
-              hold()
-              fire('highlight')
-            }}
-          >
-            Vurgula
-          </button>
-          <button
-            type="button"
-            className="chip chip-idle"
-            onPointerDown={preserveSelectionOnPointerDown}
-            onClick={() => {
-              hold()
-              fire('omit')
-            }}
-          >
-            Çıkar
-          </button>
-          <button
-            type="button"
-            className="chip chip-idle"
-            onPointerDown={preserveSelectionOnPointerDown}
-            onClick={() => {
-              hold()
-              fire('extract')
-            }}
-          >
-            Alıntıla
-          </button>
-        </div>
-      </div>
+      />
     ) : null
 
   return (

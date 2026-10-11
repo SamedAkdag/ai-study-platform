@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  preserveSelectionOnPointerDown,
   useTextSelection,
 } from '@/hooks/useTextSelection'
 import {
@@ -13,6 +12,7 @@ import {
 } from '@/lib/pdf'
 import type { PageText } from '@/lib/slidingWindow'
 import type { PdfSelectionAction, PdfSelectionPayload } from '@/types/pdfSelection'
+import SelectionActionBar from '@/components/SelectionActionBar'
 import StudyMarkdown from '@/components/StudyMarkdown'
 import PdfPagePreview, { stripImageNotices } from '@/components/PdfPagePreview'
 import PdfViewer from '@/components/PdfViewer'
@@ -333,9 +333,10 @@ export default function StudyPdfReader({
 
   const toolbar =
     selection && onAction && !showOriginalFallback ? (
-      <div
-        data-selection-toolbar
-        className="selection-action-bar selection-action-bar--float pdf-selection-bar"
+      <SelectionActionBar
+        preview={selection.selectedText}
+        hold={hold}
+        onAction={fire}
         style={{
           position: 'absolute',
           top: Math.max(
@@ -353,38 +354,7 @@ export default function StudyPdfReader({
           ),
           zIndex: 30,
         }}
-      >
-        <p className="selection-action-bar__preview">
-          {selection.selectedText.slice(0, 80)}
-          {selection.selectedText.length > 80 ? '…' : ''}
-        </p>
-        <div className="selection-action-bar__actions">
-          {(
-            [
-              ['summarize', 'Özetle', true],
-              ['ask', 'AI’ya sor', false],
-              ['cite', 'Cite', false],
-              ['note', 'Benim notum', false],
-              ['highlight', 'Vurgula', false],
-              ['omit', 'Çıkar', false],
-              ['extract', 'Alıntıla', false],
-            ] as const
-          ).map(([action, label, active]) => (
-            <button
-              key={action}
-              type="button"
-              className={`chip ${active ? 'chip-active' : 'chip-idle'}`}
-              onPointerDown={preserveSelectionOnPointerDown}
-              onClick={() => {
-                hold()
-                fire(action)
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      />
     ) : null
 
   const pager = (

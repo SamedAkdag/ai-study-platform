@@ -308,7 +308,7 @@ export default function ExplanationWithInlineChat({
               }}
               className="btn-primary !px-3 !py-2 text-xs"
             >
-              Bu kısım hakkında sor
+              AI’ya sor
             </button>
             <button
               type="button"
@@ -324,23 +324,7 @@ export default function ExplanationWithInlineChat({
               }}
               className="btn-ghost !bg-white text-xs shadow-sm"
             >
-              Buradan oku
-            </button>
-            <button
-              type="button"
-              onPointerDown={onToolbarPointerDown}
-              onPointerUp={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                const text =
-                  snapshot()?.selectedText ?? askBar.selectedText
-                tts.speakPlain(text)
-                clearSelection()
-                window.getSelection()?.removeAllRanges()
-              }}
-              className="btn-ghost !bg-white text-xs shadow-sm"
-            >
-              Seçimi oku
+              Sesli oku
             </button>
             {onShowInBook && (
               <button
@@ -357,7 +341,7 @@ export default function ExplanationWithInlineChat({
                 }}
                 className="btn-ghost !bg-white text-xs shadow-sm"
               >
-                Kitapta göster
+                Kaynak’ta bul
               </button>
             )}
           </div>
