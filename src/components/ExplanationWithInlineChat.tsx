@@ -266,7 +266,7 @@ export default function ExplanationWithInlineChat({
       <div className="mb-4">
         <TtsControls
           tts={tts}
-          label="Oku"
+          label="Sesli oku"
           onReadAll={() => tts.speakMarkdown(localMarkdown)}
         />
       </div>

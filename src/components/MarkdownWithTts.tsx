@@ -45,7 +45,7 @@ export default function MarkdownWithTts({ markdown }: Props) {
     <div ref={wrapRef} className="relative space-y-3">
       <TtsControls
         tts={tts}
-        label="Oku"
+        label="Sesli oku"
         onReadAll={() => tts.speakMarkdown(markdown)}
       />
       {tts.chunkInfo && tts.status !== 'idle' && (

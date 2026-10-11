@@ -234,14 +234,6 @@ export default function ChapterPage() {
   const readBody =
     ready && ch ? (
       <div className="space-y-5">
-        {mindMap ? (
-          <MindMapPanel
-            data={mindMap}
-            title={ch.title}
-            markdown={markdownForDepth || ch.explanation}
-          />
-        ) : null}
-
         <div className="mode-segment" role="tablist" aria-label="Derinlik">
           {depths.map((d) => (
             <button
@@ -309,6 +301,21 @@ export default function ChapterPage() {
             </div>
           )}
         </section>
+
+        {mindMap ? (
+          <details className="mind-map-disclosure">
+            <summary className="mind-map-disclosure__summary">
+              Konu haritası
+            </summary>
+            <div className="mt-3">
+              <MindMapPanel
+                data={mindMap}
+                title={ch.title}
+                markdown={markdownForDepth || ch.explanation}
+              />
+            </div>
+          </details>
+        ) : null}
       </div>
     ) : null
 
@@ -428,14 +435,12 @@ export default function ChapterPage() {
             }}
           />
         )}
-        <section className="surface-panel p-4 sm:p-5">
-          <p className="section-label mb-2">PDF kesitleri</p>
-          <SourcesPanel
-            sources={pageSources}
-            highlight={bookHits}
-            onClearHighlight={() => setBookHits([])}
-          />
-        </section>
+        <SourcesPanel
+          sources={pageSources}
+          highlight={bookHits}
+          onClearHighlight={() => setBookHits([])}
+          showSelectHint={!pdfSel && !draftCite}
+        />
       </div>
     ) : (
       <div className="space-y-3 p-1">
@@ -470,12 +475,7 @@ export default function ChapterPage() {
             setPdfMode(null)
           }}
         />
-        {!pdfSel && !draftCite && (
-          <p className="muted text-sm">
-            PDF’de metin seç → AI · Cite · İşaretle. Ünite notları hazır olunca
-            Oku / Çalış dolacak.
-          </p>
-        )}
+        {!pdfSel && !draftCite && <SourceSelectHint pendingNotes />}
       </div>
     )
 
@@ -567,11 +567,27 @@ export default function ChapterPage() {
 
         <div>
           <p className="section-label mb-2">Ünite</p>
-          <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+          <h1
+            className={`font-display font-semibold tracking-tight ${
+              mode === 'source'
+                ? 'text-2xl sm:text-3xl'
+                : 'text-3xl sm:text-4xl'
+            }`}
+          >
             {ch?.title || '…'}
           </h1>
-          {ch?.summary && (
-            <p className="muted mt-3 max-w-2xl text-sm leading-relaxed">
+          {ch?.summary && mode === 'source' && (
+            <details className="chapter-summary-disclosure mt-2">
+              <summary className="muted cursor-pointer text-xs font-semibold">
+                Özet
+              </summary>
+              <p className="muted mt-2 max-w-2xl text-sm leading-relaxed">
+                {ch.summary}
+              </p>
+            </details>
+          )}
+          {ch?.summary && mode !== 'source' && (
+            <p className="muted mt-3 max-w-2xl text-sm leading-relaxed line-clamp-3">
               {ch.summary}
             </p>
           )}
@@ -739,25 +755,65 @@ export default function ChapterPage() {
   )
 }
 
+function SourceSelectHint({ pendingNotes }: { pendingNotes?: boolean }) {
+  return (
+    <div className="source-select-hint space-y-1.5">
+      <p className="text-sm font-medium" style={{ color: 'var(--ink)' }}>
+        PDF’de metin seç → AI · Cite · İşaretle
+      </p>
+      <p className="muted text-xs leading-relaxed">
+        {pendingNotes
+          ? 'Ünite notları hazır olunca Oku / Çalış dolacak. Bu arada PDF üzerinden soru sorabilir veya alıntı alabilirsin.'
+          : 'Saklı sayfa kesiti yoksa (tarama/OCR) doğrudan PDF üzerinden çalış.'}
+      </p>
+    </div>
+  )
+}
+
 function SourcesPanel({
   sources,
   highlight,
   onClearHighlight,
+  showSelectHint,
 }: {
   sources: PageSource[]
   highlight: Array<{ page: number; excerpt: string }>
   onClearHighlight: () => void
+  showSelectHint?: boolean
 }) {
-  if (!sources.length) {
+  const usable = sources.filter((s) => !!s.excerpt?.trim())
+
+  if (!usable.length) {
     return (
-      <p className="muted text-sm">Bu ünite için saklanmış PDF metni yok.</p>
+      <div className="space-y-3">
+        {highlight.length > 0 && (
+          <div className="space-y-2">
+            <p className="section-label">Seçim eşleşmeleri</p>
+            <ul className="space-y-2">
+              {highlight.map((h, i) => (
+                <li key={i} className="text-xs" style={{ color: 'var(--ink)' }}>
+                  <span className="font-semibold">s. {h.page}</span>
+                  <p className="mt-0.5 whitespace-pre-wrap opacity-90">
+                    …{h.excerpt}…
+                  </p>
+                </li>
+              ))}
+            </ul>
+            <button type="button" onClick={onClearHighlight} className="btn-ghost text-xs">
+              Vurguyu temizle
+            </button>
+          </div>
+        )}
+        {showSelectHint !== false && <SourceSelectHint />}
+      </div>
     )
   }
 
   const highlightPages = new Set(highlight.map((h) => h.page))
 
   return (
-    <div className="space-y-4">
+    <section className="surface-panel space-y-4 p-4 sm:p-5">
+      <p className="section-label">PDF kesitleri</p>
       <p className="muted text-sm leading-relaxed">
         Ham sayfa kesitleri — AI özeti değil.
       </p>
@@ -766,7 +822,7 @@ function SourcesPanel({
           Seçim vurgusunu temizle
         </button>
       )}
-      {sources.map((s) => (
+      {usable.map((s) => (
         <article
           key={s.page}
           className="rounded-xl border px-4 py-3"
@@ -791,11 +847,11 @@ function SourcesPanel({
             className="whitespace-pre-wrap text-xs leading-relaxed"
             style={{ color: 'var(--ink-muted)' }}
           >
-            {s.excerpt || '(bu sayfada çıkarılabilir metin yok)'}
+            {s.excerpt}
           </p>
         </article>
       ))}
-    </div>
+    </section>
   )
 }
 

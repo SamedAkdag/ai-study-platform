@@ -150,7 +150,9 @@ export default function SharedChapterPage() {
           />
         )}
         {ch.summary && (
-          <p className="muted max-w-2xl text-sm leading-relaxed">{ch.summary}</p>
+          <p className="muted max-w-2xl text-sm leading-relaxed line-clamp-3">
+            {ch.summary}
+          </p>
         )}
         {membership ? (
           <p className="muted text-xs">
@@ -180,13 +182,6 @@ export default function SharedChapterPage() {
       <section className="surface-panel p-5 sm:p-7">
         {mode === 'read' && (
           <div className="space-y-4">
-            {mindMap ? (
-              <MindMapPanel
-                data={mindMap}
-                title={ch.title}
-                markdown={markdown}
-              />
-            ) : null}
             <div className="mode-segment" role="tablist" aria-label="Derinlik">
               {depths.map((d) => (
                 <button
@@ -220,6 +215,20 @@ export default function SharedChapterPage() {
             ) : (
               <p className="muted text-sm">Bu seviye için içerik yok.</p>
             )}
+            {mindMap ? (
+              <details className="mind-map-disclosure">
+                <summary className="mind-map-disclosure__summary">
+                  Konu haritası
+                </summary>
+                <div className="mt-3">
+                  <MindMapPanel
+                    data={mindMap}
+                    title={ch.title}
+                    markdown={markdown}
+                  />
+                </div>
+              </details>
+            ) : null}
           </div>
         )}
 
