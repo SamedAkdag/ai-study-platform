@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { pdfjsLib, ensurePdfWorker } from '@/lib/pdfjs'
 import { useTextSelection } from '@/hooks/useTextSelection'
 import type {
@@ -7,14 +7,20 @@ import type {
 } from '@/types/pdfSelection'
 import PageJumpControl from '@/components/PageJumpControl'
 import SelectionActionBar from '@/components/SelectionActionBar'
-import PdfInlineLayer, { type InlineDraft } from '@/components/PdfInlineLayer'
+import PdfInsertBlock, { type InsertDraft } from '@/components/PdfInsertBlock'
 import {
   addPdfAnnotation,
   removePdfAnnotation,
   type PdfAnnotation,
   type PdfAiMode,
 } from '@/lib/pdfAnnotations'
-import { normQuote } from '@/lib/pdfQuoteAnchor'
+import { findQuoteAnchor, normQuote } from '@/lib/pdfQuoteAnchor'
+import {
+  buildPageSegments,
+  isFlowInsert,
+  resolveInsertY,
+  type PageInsert,
+} from '@/lib/pdfInserts'
 
 export type { PdfSelectionAction, PdfSelectionPayload }
 
@@ -26,7 +32,6 @@ type Props = {
   onPageChange?: (page: number) => void
   omittedQuotes?: string[]
   highlightedQuotes?: string[]
-  /** Saved marks / AI / notes for this book (viewer filters by page) */
   annotations?: PdfAnnotation[]
   bookId?: string
   chapterId?: string
@@ -35,6 +40,14 @@ type Props = {
   onAction?: (payload: PdfSelectionPayload, action: PdfSelectionAction) => void
   className?: string
   hideChrome?: boolean
+}
+
+type PageRaster = {
+  canvas: HTMLCanvasElement
+  width: number
+  height: number
+  /** Serialized text layer HTML for cloning into bands */
+  textHtml: string
 }
 
 export default function PdfViewer({
@@ -56,19 +69,19 @@ export default function PdfViewer({
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const pageHostRef = useRef<HTMLDivElement>(null)
-  const renderMountRef = useRef<HTMLDivElement>(null)
-  const [pageHostEl, setPageHostEl] = useState<HTMLElement | null>(null)
+  const measureLayerRef = useRef<HTMLDivElement>(null)
   const [pageInternal, setPageInternal] = useState(pageProp ?? startPage)
   const [numPages, setNumPages] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [scale, setScale] = useState(1.15)
-  const [draft, setDraft] = useState<InlineDraft | null>(null)
+  const [draft, setDraft] = useState<InsertDraft | null>(null)
+  const [raster, setRaster] = useState<PageRaster | null>(null)
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
 
   const controlled = typeof pageProp === 'number'
   const page = controlled ? pageProp : pageInternal
-  const canInline = !!(bookId && chapterId)
+  const canInsert = !!(bookId && chapterId)
 
   function setPage(next: number | ((p: number) => number)) {
     const raw = typeof next === 'function' ? next(page) : next
@@ -157,27 +170,22 @@ export default function PdfViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src, startPage, endPage])
 
+  // Rasterize full page + text layer HTML once per page/scale
   useEffect(() => {
-    const host = renderMountRef.current
     const doc = docRef.current
-    if (!host || !doc || loading) return
-
+    if (!doc || loading) return
     let cancelled = false
 
     void (async () => {
-      host.innerHTML = ''
       try {
         const pdfPage = await doc.getPage(page)
         if (cancelled) return
-
         const viewport = pdfPage.getViewport({ scale })
         const canvas = document.createElement('canvas')
         const ctx = canvas.getContext('2d')
         if (!ctx) throw new Error('Canvas yok')
         canvas.width = viewport.width
         canvas.height = viewport.height
-        canvas.className = 'pdf-page-canvas'
-        host.appendChild(canvas)
         await pdfPage.render({ canvasContext: ctx, viewport }).promise
         if (cancelled) return
 
@@ -185,7 +193,14 @@ export default function PdfViewer({
         textLayerDiv.className = 'textLayer pdf-text-layer'
         textLayerDiv.style.width = `${viewport.width}px`
         textLayerDiv.style.height = `${viewport.height}px`
-        host.appendChild(textLayerDiv)
+        // Off-DOM measure host for quote Y + HTML snapshot
+        const mount = measureLayerRef.current
+        if (mount) {
+          mount.innerHTML = ''
+          mount.style.width = `${viewport.width}px`
+          mount.style.height = `${viewport.height}px`
+          mount.appendChild(textLayerDiv)
+        }
 
         const textContent = await pdfPage.getTextContent()
         const textLayer = new pdfjsLib.TextLayer({
@@ -194,6 +209,17 @@ export default function PdfViewer({
           viewport,
         })
         await textLayer.render()
+        if (cancelled) return
+
+        markTextLayer(textLayerDiv, omittedQuotes, 'is-omitted')
+        markTextLayer(textLayerDiv, highlightedQuotes, 'is-highlighted')
+
+        setRaster({
+          canvas,
+          width: viewport.width,
+          height: viewport.height,
+          textHtml: textLayerDiv.innerHTML,
+        })
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Sayfa çizilemedi')
@@ -204,43 +230,39 @@ export default function PdfViewer({
     return () => {
       cancelled = true
     }
-  }, [page, scale, loading, numPages])
-
-  useEffect(() => {
-    const host = renderMountRef.current
-    if (!host || loading) return
-    const layer = host.querySelector('.textLayer') as HTMLElement | null
-    if (!layer) return
-    layer
-      .querySelectorAll('span.is-highlighted, span.is-omitted')
-      .forEach((el) => {
-        el.classList.remove('is-highlighted', 'is-omitted')
-      })
-    markTextLayer(layer, omittedQuotes, 'is-omitted')
-    markTextLayer(layer, highlightedQuotes, 'is-highlighted')
   }, [page, scale, loading, numPages, omittedQuotes, highlightedQuotes])
 
-  function selectionAnchor(snap: {
-    rect: DOMRect
-  }): { top: number; left: number } {
-    const host = pageHostRef.current
-    if (!host) return { top: 48, left: 16 }
-    const box = host.getBoundingClientRect()
-    return {
-      top: Math.max(8, snap.rect.bottom - box.top + 8),
-      left: Math.max(8, snap.rect.left - box.left),
-    }
-  }
+  const pageInserts: PageInsert[] = useMemo(() => {
+    if (!raster) return []
+    const layer = measureLayerRef.current?.querySelector(
+      '.textLayer',
+    ) as HTMLElement | null
+    const list: PageInsert[] = []
 
-  function pctFromPx(top: number, left: number) {
-    const host = pageHostRef.current
-    const h = Math.max(host?.clientHeight || 1, 1)
-    const w = Math.max(host?.clientWidth || 1, 1)
-    return {
-      anchorTopPct: top / h,
-      anchorLeftPct: left / w,
+    for (const a of annotations) {
+      if (a.page !== page || !isFlowInsert(a)) continue
+      list.push({
+        id: a.id,
+        y: resolveInsertY(a, raster.height, layer),
+        annotation: a,
+      })
     }
-  }
+
+    if (draft) {
+      list.push({
+        id: '__draft__',
+        y: draft.y,
+        draft: true,
+      })
+    }
+
+    return list
+  }, [annotations, page, raster, draft])
+
+  const segments = useMemo(() => {
+    if (!raster) return []
+    return buildPageSegments(raster.height, pageInserts)
+  }, [raster, pageInserts])
 
   function fire(action: PdfSelectionAction) {
     const snap = snapshot()
@@ -252,25 +274,42 @@ export default function PdfViewer({
       page,
     }
 
-    const inlineAi =
-      canInline &&
-      (action === 'ask' || action === 'summarize' || action === 'explain')
-    const inlineNote = canInline && action === 'note'
+    const openInsert =
+      canInsert &&
+      (action === 'ask' ||
+        action === 'summarize' ||
+        action === 'explain' ||
+        action === 'note')
 
-    if (inlineAi || inlineNote) {
-      const { top, left } = selectionAnchor(snap)
+    if (openInsert && raster) {
+      const layer = measureLayerRef.current?.querySelector(
+        '.textLayer',
+      ) as HTMLElement | null
+      const host = pageHostRef.current
+      let y = raster.height * 0.4
+      if (layer) {
+        const anchor = findQuoteAnchor(layer, payload.selectedText)
+        if (anchor) y = anchor.bottom
+      } else if (host) {
+        const box = host.getBoundingClientRect()
+        // Fallback: map viewport selection into first band space — approximate
+        y = Math.min(
+          raster.height - 1,
+          Math.max(1, snap.rect.bottom - box.top),
+        )
+      }
       setDraft(
-        inlineNote
-          ? { kind: 'note', payload, top, left }
-          : {
-              kind: 'ai',
-              mode: action as PdfAiMode,
-              payload,
-              top,
-              left,
-            },
+        action === 'note'
+          ? { kind: 'note', payload, y }
+          : { kind: 'ai', mode: action as PdfAiMode, payload, y },
       )
       clearSelection()
+      // Scroll insert into view shortly after layout
+      window.setTimeout(() => {
+        document
+          .querySelector('.pdf-insert--draft')
+          ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }, 80)
       return
     }
 
@@ -281,7 +320,7 @@ export default function PdfViewer({
   const toolbarStyle = (() => {
     if (!selection) return undefined
     const gap = 10
-    const barW = 300
+    const barW = 320
     const barH = 78
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
     const vh = typeof window !== 'undefined' ? window.innerHeight : 800
@@ -293,15 +332,10 @@ export default function PdfViewer({
       Math.max(8, selection.rect.left),
       Math.max(8, vw - barW - 8),
     )
-    return {
-      position: 'fixed' as const,
-      top,
-      left,
-      zIndex: 90,
-    }
+    return { position: 'fixed' as const, top, left, zIndex: 90 }
   })()
 
-  const showToolbar = !!selection && (!!onAction || canInline)
+  const showToolbar = !!selection && (!!onAction || canInsert)
 
   return (
     <div className={`pdf-viewer ${className}`}>
@@ -350,56 +384,81 @@ export default function PdfViewer({
       <div ref={wrapRef} className="pdf-viewer__scroll">
         {loading && <p className="muted p-4 text-sm">PDF yükleniyor…</p>}
         {error && <div className="alert-error m-3">{error}</div>}
+
+        {/* Hidden measure layer for quote geometry */}
         <div
-          ref={(el) => {
-            pageHostRef.current = el
-            setPageHostEl(el)
-          }}
-          className="pdf-page-host"
-        >
-          <div ref={renderMountRef} className="pdf-page-render" />
-          {canInline && chapterId && chapterTitle && bookId ? (
-            <PdfInlineLayer
-              pageHost={pageHostEl}
-              page={page}
-              annotations={annotations}
-              draft={draft}
-              chapterId={chapterId}
-              chapterTitle={chapterTitle}
-              onDraftClose={() => setDraft(null)}
-              onSaveAi={({ payload, mode, question, body, top, left }) => {
-                const pct = pctFromPx(top, left)
-                addPdfAnnotation(bookId, {
-                  page: payload.page,
-                  kind: 'ai',
-                  aiMode: mode,
-                  quote: payload.selectedText,
-                  question,
-                  body,
-                  ...pct,
-                })
-                setDraft(null)
-                onAnnotationsChange?.()
-              }}
-              onSaveNote={({ payload, body, top, left }) => {
-                const pct = pctFromPx(top, left)
-                addPdfAnnotation(bookId, {
-                  page: payload.page,
-                  kind: 'note',
-                  quote: payload.selectedText,
-                  body,
-                  ...pct,
-                })
-                setDraft(null)
-                onAnnotationsChange?.()
-              }}
-              onRemove={(id) => {
-                removePdfAnnotation(bookId, id)
-                onAnnotationsChange?.()
-              }}
-            />
-          ) : null}
+          ref={measureLayerRef}
+          className="pdf-measure-layer"
+          aria-hidden
+        />
+
+        <div ref={pageHostRef} className="pdf-page-host pdf-page-host--composed">
+          {raster &&
+            segments.map((seg) => {
+              if (seg.type === 'band') {
+                return (
+                  <PdfBand
+                    key={seg.key}
+                    raster={raster}
+                    srcTop={seg.srcTop}
+                    height={seg.height}
+                  />
+                )
+              }
+              const insert = seg.insert
+              const annotation = insert.annotation
+              const isDraft = insert.draft && draft
+              return (
+                <PdfInsertBlock
+                  key={seg.key}
+                  annotation={annotation}
+                  draft={isDraft ? draft : undefined}
+                  chapterId={chapterId || ''}
+                  chapterTitle={chapterTitle || 'PDF'}
+                  onDismissDraft={() => setDraft(null)}
+                  onCommitAi={({ payload, mode, question, body, y }) => {
+                    if (!bookId) return
+                    const h = raster.height || 1
+                    addPdfAnnotation(bookId, {
+                      page: payload.page,
+                      kind: 'ai',
+                      aiMode: mode,
+                      quote: payload.selectedText,
+                      question,
+                      body,
+                      anchorTopPct: y / h,
+                      anchorLeftPct: 0.06,
+                    })
+                    setDraft(null)
+                    onAnnotationsChange?.()
+                  }}
+                  onCommitNote={({ payload, body, y }) => {
+                    if (!bookId) return
+                    const h = raster.height || 1
+                    addPdfAnnotation(bookId, {
+                      page: payload.page,
+                      kind: 'note',
+                      quote: payload.selectedText,
+                      body,
+                      anchorTopPct: y / h,
+                      anchorLeftPct: 0.06,
+                    })
+                    setDraft(null)
+                    onAnnotationsChange?.()
+                  }}
+                  onRemove={
+                    bookId
+                      ? (id) => {
+                          removePdfAnnotation(bookId, id)
+                          onAnnotationsChange?.()
+                        }
+                      : undefined
+                  }
+                />
+              )
+            })}
         </div>
+
         {showToolbar ? (
           <SelectionActionBar
             preview={selection!.selectedText}
@@ -409,6 +468,58 @@ export default function PdfViewer({
           />
         ) : null}
       </div>
+    </div>
+  )
+}
+
+function PdfBand({
+  raster,
+  srcTop,
+  height,
+}: {
+  raster: PageRaster
+  srcTop: number
+  height: number
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const layerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const c = canvasRef.current
+    if (!c) return
+    c.width = raster.width
+    c.height = Math.max(1, Math.round(height))
+    const ctx = c.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(
+      raster.canvas,
+      0,
+      srcTop,
+      raster.width,
+      height,
+      0,
+      0,
+      raster.width,
+      height,
+    )
+  }, [raster, srcTop, height])
+
+  useEffect(() => {
+    const layer = layerRef.current
+    if (!layer) return
+    layer.innerHTML = raster.textHtml
+    layer.style.width = `${raster.width}px`
+    layer.style.height = `${raster.height}px`
+    layer.style.transform = `translateY(${-srcTop}px)`
+  }, [raster, srcTop])
+
+  return (
+    <div
+      className="pdf-band"
+      style={{ width: raster.width, height: Math.max(1, height) }}
+    >
+      <canvas ref={canvasRef} className="pdf-page-canvas" />
+      <div ref={layerRef} className="textLayer pdf-text-layer pdf-band__text" />
     </div>
   )
 }

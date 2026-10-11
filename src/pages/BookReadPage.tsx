@@ -296,6 +296,7 @@ export default function BookReadPage() {
         loadingMore={loadingMore}
         omittedQuotes={omittedQuotes}
         highlightedQuotes={highlightedQuotes}
+        annotations={notes}
         onAction={handleAction}
       />
     ) : pdf.url ? (

@@ -874,8 +874,8 @@ function SourceSelectHint({ pendingNotes }: { pendingNotes?: boolean }) {
       </p>
       <p className="muted text-xs leading-relaxed">
         {pendingNotes
-          ? 'Ünite notları hazır olunca Anlatım / Alıştır dolacak. PDF’de seç → AI yanıtı ve notların seçimin altında kalır.'
-          : 'PDF’de metin seç → AI’ya sor / özetle; yanıt seçimin hemen altında görünür.'}
+          ? 'Ünite notları hazır olunca Anlatım / Alıştır dolacak. PDF’de seç → Kitaba ekle ile seçimin altına yapıştır.'
+          : 'PDF’de metin seç → AI yanıtını “Kitaba ekle” ile seçimin tam altına göm.'}
       </p>
     </div>
   )

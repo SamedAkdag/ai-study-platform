@@ -12,6 +12,8 @@ import {
 } from '@/lib/pdf'
 import type { PageText } from '@/lib/slidingWindow'
 import type { PdfSelectionAction, PdfSelectionPayload } from '@/types/pdfSelection'
+import type { PdfAnnotation } from '@/lib/pdfAnnotations'
+import { injectPdfInsertsIntoMarkdown } from '@/lib/injectPdfInserts'
 import SelectionActionBar from '@/components/SelectionActionBar'
 import StudyMarkdown from '@/components/StudyMarkdown'
 import PdfPagePreview, { stripImageNotices } from '@/components/PdfPagePreview'
@@ -30,6 +32,7 @@ type Props = {
   loadingMore?: boolean
   omittedQuotes?: string[]
   highlightedQuotes?: string[]
+  annotations?: PdfAnnotation[]
   onAction?: (payload: PdfSelectionPayload, action: PdfSelectionAction) => void
   className?: string
 }
@@ -193,6 +196,7 @@ export default function StudyPdfReader({
   loadingMore = false,
   omittedQuotes = [],
   highlightedQuotes = [],
+  annotations = [],
   onAction,
   className = '',
 }: Props) {
@@ -301,9 +305,12 @@ export default function StudyPdfReader({
   const repairedMd =
     columnRepair && columnRepair.page === page ? columnRepair.markdown : null
 
-  const displayMarkdown = repairedMd
-    ? applyOmissions(repairedMd, omittedQuotes)
-    : markdown
+  const displayMarkdown = useMemo(() => {
+    const base = repairedMd
+      ? applyOmissions(repairedMd, omittedQuotes)
+      : markdown
+    return injectPdfInsertsIntoMarkdown(base, annotations, page)
+  }, [repairedMd, omittedQuotes, markdown, annotations, page])
 
   const showOriginalFallback =
     pageReady &&
