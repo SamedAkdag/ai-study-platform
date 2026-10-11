@@ -5,6 +5,9 @@ export type PdfAnnotationKind =
   | 'extract'
   | 'cite'
   | 'bookmark'
+  | 'ai'
+
+export type PdfAiMode = 'ask' | 'summarize' | 'explain'
 
 export type PdfAnnotation = {
   id: string
@@ -12,10 +15,17 @@ export type PdfAnnotation = {
   page: number
   kind: PdfAnnotationKind
   quote: string
-  /** User's own explanation / "benim notum" / formatted citation */
+  /** User note / citation / AI answer body */
   body?: string
   /** apa | ieee | bibtex when kind === 'cite' */
   citeStyle?: string
+  /** When kind === 'ai' */
+  aiMode?: PdfAiMode
+  /** User question for ask mode */
+  question?: string
+  /** Vertical anchor as fraction of page height (0–1), under the quote */
+  anchorTopPct?: number
+  anchorLeftPct?: number
   createdAt: string
 }
 
@@ -63,7 +73,18 @@ export function addPdfAnnotation(
 export function updatePdfAnnotation(
   bookId: string,
   id: string,
-  patch: Partial<Pick<PdfAnnotation, 'body' | 'kind' | 'citeStyle'>>,
+  patch: Partial<
+    Pick<
+      PdfAnnotation,
+      | 'body'
+      | 'kind'
+      | 'citeStyle'
+      | 'question'
+      | 'aiMode'
+      | 'anchorTopPct'
+      | 'anchorLeftPct'
+    >
+  >,
 ): PdfAnnotation[] {
   const next = loadPdfAnnotations(bookId).map((a) =>
     a.id === id ? { ...a, ...patch } : a,
@@ -87,5 +108,12 @@ export function annotationKindLabel(kind: PdfAnnotationKind): string {
   if (kind === 'omit') return 'Çıkarıldı'
   if (kind === 'extract') return 'Alıntı'
   if (kind === 'cite') return 'Cite'
+  if (kind === 'ai') return 'AI notu'
   return 'Yer imi'
+}
+
+export function annotationAiLabel(mode?: PdfAiMode): string {
+  if (mode === 'summarize') return 'Özet'
+  if (mode === 'explain') return 'Açıklama'
+  return 'AI yanıtı'
 }

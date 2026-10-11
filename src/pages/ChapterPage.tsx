@@ -19,7 +19,9 @@ import FlashcardStories from '@/components/FlashcardStories'
 import StudySplitPane from '@/components/StudySplitPane'
 import {
   addPdfAnnotation,
+  annotationKindLabel,
   loadPdfAnnotations,
+  type PdfAnnotation,
 } from '@/lib/pdfAnnotations'
 import { citationStyleLabel } from '@/lib/citations'
 import {
@@ -62,13 +64,43 @@ export default function ChapterPage() {
     null,
   )
   const [draftCite, setDraftCite] = useState<PdfSelectionPayload | null>(null)
+  const [draftNote, setDraftNote] = useState<PdfSelectionPayload | null>(null)
+  const [noteBody, setNoteBody] = useState('')
   const [citeToast, setCiteToast] = useState<string | null>(null)
+  const [pdfNotes, setPdfNotes] = useState<PdfAnnotation[]>([])
   const [flashOpen, setFlashOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [togetherOpen, setTogetherOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
   const autoRetryRef = useRef(0)
   const queryClient = useQueryClient()
+
+  useEffect(() => {
+    if (!bookId) {
+      setPdfNotes([])
+      return
+    }
+    setPdfNotes(loadPdfAnnotations(bookId))
+  }, [bookId])
+
+  const omittedQuotes = useMemo(
+    () => pdfNotes.filter((n) => n.kind === 'omit').map((n) => n.quote),
+    [pdfNotes],
+  )
+  const highlightedQuotes = useMemo(
+    () =>
+      pdfNotes
+        .filter(
+          (n) =>
+            n.kind === 'highlight' || n.kind === 'note' || n.kind === 'ai',
+        )
+        .map((n) => n.quote),
+    [pdfNotes],
+  )
+
+  function refreshPdfNotes() {
+    if (bookId) setPdfNotes(loadPdfAnnotations(bookId))
+  }
 
   const chapterQuery = useQuery({
     queryKey: ['chapter', chapterId],
@@ -199,6 +231,7 @@ export default function ChapterPage() {
   function handlePdfAction(payload: PdfSelectionPayload, m: PdfSelectionAction) {
     if (m === 'ask' || m === 'summarize' || m === 'explain') {
       setDraftCite(null)
+      setDraftNote(null)
       setPdfSel(payload)
       setPdfMode(m)
       setMobilePane('notes')
@@ -207,27 +240,28 @@ export default function ChapterPage() {
     if ((m === 'cite' || m === 'extract') && bookId) {
       setPdfSel(null)
       setPdfMode(null)
+      setDraftNote(null)
       setDraftCite(payload)
       setMobilePane('notes')
       return
     }
-    if ((m === 'highlight' || m === 'note' || m === 'omit') && bookId) {
-      if (m === 'note') {
-        addPdfAnnotation(bookId, {
-          page: payload.page,
-          kind: 'note',
-          quote: payload.selectedText,
-        })
-      } else {
-        addPdfAnnotation(bookId, {
-          page: payload.page,
-          kind: m === 'omit' ? 'omit' : 'highlight',
-          quote: payload.selectedText,
-        })
-      }
-      setCiteToast(
-        m === 'note' ? 'Not eklendi' : m === 'omit' ? 'Metin gizlendi' : 'Vurgulandı',
-      )
+    if (m === 'note' && bookId) {
+      setPdfSel(null)
+      setPdfMode(null)
+      setDraftCite(null)
+      setDraftNote(payload)
+      setNoteBody('')
+      setMobilePane('notes')
+      return
+    }
+    if ((m === 'highlight' || m === 'omit') && bookId) {
+      addPdfAnnotation(bookId, {
+        page: payload.page,
+        kind: m === 'omit' ? 'omit' : 'highlight',
+        quote: payload.selectedText,
+      })
+      refreshPdfNotes()
+      setCiteToast(m === 'omit' ? 'Metin gizlendi' : 'Vurgulandı')
       window.setTimeout(() => setCiteToast(null), 1800)
     }
   }
@@ -392,10 +426,81 @@ export default function ChapterPage() {
       </div>
     ) : null
 
+  const pageMarks = useMemo(() => pdfNotes.slice(0, 12), [pdfNotes])
+
+  const noteComposer =
+    draftNote && bookId ? (
+      <div className="surface-panel space-y-3 p-4">
+        <p className="section-label mb-0">Benim notum</p>
+        <blockquote className="pdf-ai-panel__quote text-sm">
+          {draftNote.selectedText.slice(0, 220)}
+          {draftNote.selectedText.length > 220 ? '…' : ''}
+        </blockquote>
+        <textarea
+          className="field text-sm"
+          rows={3}
+          autoFocus
+          placeholder="Kısa notun…"
+          value={noteBody}
+          onChange={(e) => setNoteBody(e.target.value)}
+        />
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="btn-primary text-xs"
+            onClick={() => {
+              addPdfAnnotation(bookId, {
+                page: draftNote.page,
+                kind: 'note',
+                quote: draftNote.selectedText,
+                body: noteBody.trim() || undefined,
+              })
+              setDraftNote(null)
+              setNoteBody('')
+              refreshPdfNotes()
+              setCiteToast('Not kaydedildi')
+              window.setTimeout(() => setCiteToast(null), 1800)
+            }}
+          >
+            Kaydet
+          </button>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            onClick={() => {
+              setDraftNote(null)
+              setNoteBody('')
+            }}
+          >
+            Vazgeç
+          </button>
+        </div>
+      </div>
+    ) : null
+
+  const marksList =
+    pageMarks.length > 0 ? (
+      <div className="space-y-2">
+        <p className="section-label">İşaretlerin</p>
+        <ul className="space-y-2">
+          {pageMarks.map((n) => (
+            <li key={n.id} className="pdf-note-card text-xs">
+              <p className="font-semibold">
+                {annotationKindLabel(n.kind)} · s. {n.page}
+              </p>
+              <p className="muted mt-1 line-clamp-3">“{n.quote}”</p>
+              {n.body ? <p className="mt-1.5">{n.body}</p> : null}
+            </li>
+          ))}
+        </ul>
+      </div>
+    ) : null
+
   const sourceNotes =
     ready && ch ? (
       <div className="space-y-4">
         {citeToast && <div className="alert-info text-sm">{citeToast}</div>}
+        {noteComposer}
         {draftCite && bookId && (
           <CiteDraftPanel
             bookId={bookId}
@@ -411,8 +516,9 @@ export default function ChapterPage() {
                 citeStyle: style,
               })
               setDraftCite(null)
+              refreshPdfNotes()
               setCiteToast(
-                `${citationStyleLabel(style)} panoya + notlara eklendi (${loadPdfAnnotations(bookId).length} kayıt)`,
+                `${citationStyleLabel(style)} panoya + notlara eklendi`,
               )
               window.setTimeout(() => setCiteToast(null), 2200)
             }}
@@ -430,16 +536,18 @@ export default function ChapterPage() {
             }}
           />
         )}
+        {marksList}
         <SourcesPanel
           sources={pageSources}
           highlight={bookHits}
           onClearHighlight={() => setBookHits([])}
-          showSelectHint={!pdfSel && !draftCite}
+          showSelectHint={!pdfSel && !draftCite && !draftNote}
         />
       </div>
     ) : (
       <div className="space-y-3 p-1">
         {citeToast && <div className="alert-info text-sm">{citeToast}</div>}
+        {noteComposer}
         {draftCite && bookId && (
           <CiteDraftPanel
             bookId={bookId}
@@ -455,6 +563,7 @@ export default function ChapterPage() {
                 citeStyle: style,
               })
               setDraftCite(null)
+              refreshPdfNotes()
               setCiteToast(`${citationStyleLabel(style)} kaydedildi`)
               window.setTimeout(() => setCiteToast(null), 2200)
             }}
@@ -470,7 +579,8 @@ export default function ChapterPage() {
             setPdfMode(null)
           }}
         />
-        {!pdfSel && !draftCite && <SourceSelectHint pendingNotes />}
+        {marksList}
+        {!pdfSel && !draftCite && !draftNote && <SourceSelectHint pendingNotes />}
       </div>
     )
 
@@ -663,6 +773,13 @@ export default function ChapterPage() {
               src={pdf.url!}
               startPage={ch?.start_page || 1}
               endPage={ch?.end_page || undefined}
+              omittedQuotes={omittedQuotes}
+              highlightedQuotes={highlightedQuotes}
+              annotations={pdfNotes}
+              bookId={bookId}
+              chapterId={ch?.id || chapterId}
+              chapterTitle={ch?.title || 'Ünite'}
+              onAnnotationsChange={refreshPdfNotes}
               onAction={handlePdfAction}
             />
           }
@@ -757,8 +874,8 @@ function SourceSelectHint({ pendingNotes }: { pendingNotes?: boolean }) {
       </p>
       <p className="muted text-xs leading-relaxed">
         {pendingNotes
-          ? 'Ünite notları hazır olunca Anlatım / Alıştır dolacak. Bu arada PDF’de seç → sor, alıntı al veya işaretle.'
-          : 'Saklı sayfa kesiti yoksa (tarama/OCR) doğrudan PDF’de seçip çalış.'}
+          ? 'Ünite notları hazır olunca Anlatım / Alıştır dolacak. PDF’de seç → AI yanıtı ve notların seçimin altında kalır.'
+          : 'PDF’de metin seç → AI’ya sor / özetle; yanıt seçimin hemen altında görünür.'}
       </p>
     </div>
   )

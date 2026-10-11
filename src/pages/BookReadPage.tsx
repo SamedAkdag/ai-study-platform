@@ -166,7 +166,10 @@ export default function BookReadPage() {
   const highlightedQuotes = useMemo(
     () =>
       notes
-        .filter((n) => n.kind === 'highlight' || n.kind === 'note')
+        .filter(
+          (n) =>
+            n.kind === 'highlight' || n.kind === 'note' || n.kind === 'ai',
+        )
         .map((n) => n.quote),
     [notes],
   )
@@ -302,6 +305,11 @@ export default function BookReadPage() {
         onPageChange={setReaderPage}
         omittedQuotes={omittedQuotes}
         highlightedQuotes={highlightedQuotes}
+        annotations={notes}
+        bookId={bookId}
+        chapterId={firstReady?.id || bookId}
+        chapterTitle={bookQuery.data?.title || 'PDF'}
+        onAnnotationsChange={refreshNotes}
         onAction={handleAction}
       />
     ) : (

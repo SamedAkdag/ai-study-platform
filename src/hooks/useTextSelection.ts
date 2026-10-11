@@ -132,38 +132,23 @@ function selectedTextGeometric(
   const text = normalizeWs(out)
   if (text.length < 3) return null
 
-  const last = hits[hits.length - 1]
-  const union = new DOMRect(
-    Math.min(...hits.map((h) => h.left)),
-    Math.min(...hits.map((h) => h.top)),
-    0,
-    0,
-  )
-  const maxRight = Math.max(
-    ...hits.map((h) => h.el.getBoundingClientRect().right),
-  )
-  const maxBottom = Math.max(
-    ...hits.map((h) => h.el.getBoundingClientRect().bottom),
-  )
-  const rect = new DOMRect(
-    union.x,
-    union.y,
-    maxRight - union.x,
-    maxBottom - union.y,
-  )
+  const boxes = hits.map((h) => h.el.getBoundingClientRect())
+  const minLeft = Math.min(...boxes.map((b) => b.left))
+  const minTop = Math.min(...boxes.map((b) => b.top))
+  const maxRight = Math.max(...boxes.map((b) => b.right))
+  const maxBottom = Math.max(...boxes.map((b) => b.bottom))
 
-  // Prefer bottom-left of last hit for toolbar anchor (feels like selection end)
-  const anchor = last.el.getBoundingClientRect()
-  const toolbarRect = new DOMRect(
-    anchor.left,
-    anchor.bottom,
-    Math.max(rect.width, 1),
-    1,
+  // Viewport rect of the painted selection — toolbar anchors to .bottom
+  const rect = new DOMRect(
+    minLeft,
+    minTop,
+    Math.max(1, maxRight - minLeft),
+    Math.max(1, maxBottom - minTop),
   )
 
   return {
     text,
-    rect: toolbarRect,
+    rect,
     spans: hits.map((h) => h.el),
   }
 }
@@ -319,7 +304,18 @@ export function useTextSelection(
   useEffect(() => {
     const onPointerDown = (e: Event) => {
       const target = e.target
-      if (target instanceof Element && target.closest(ignoreSelector)) return
+      if (target instanceof Element && target.closest(ignoreSelector)) {
+        // Keep pinned selection while pressing toolbar actions
+        holdingRef.current = true
+        window.clearTimeout(timerRef.current)
+        return
+      }
+      // New drag elsewhere — drop previous pin
+      if (pinnedRef.current) {
+        const root = rootRef.current
+        if (root) clearPdfSelMarks(root)
+        applyCtx(null)
+      }
       draggingRef.current = true
     }
 

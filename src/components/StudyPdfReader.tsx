@@ -332,29 +332,36 @@ export default function StudyPdfReader({
     clearSelection()
   }
 
+  const toolbarStyle = (() => {
+    if (!selection) return undefined
+    const gap = 10
+    const barW = 300
+    const barH = 78
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 800
+    let top = selection.rect.bottom + gap
+    if (top + barH > vh - 12) {
+      top = Math.max(12, selection.rect.top - barH - gap)
+    }
+    const left = Math.min(
+      Math.max(8, selection.rect.left),
+      Math.max(8, vw - barW - 8),
+    )
+    return {
+      position: 'fixed' as const,
+      top,
+      left,
+      zIndex: 90,
+    }
+  })()
+
   const toolbar =
     selection && onAction && !showOriginalFallback ? (
       <SelectionActionBar
         preview={selection.selectedText}
         hold={hold}
         onAction={fire}
-        style={{
-          position: 'absolute',
-          top: Math.max(
-            8,
-            selection.rect.bottom -
-              (wrapRef.current?.getBoundingClientRect().top ?? 0) +
-              (wrapRef.current?.scrollTop ?? 0) +
-              6,
-          ),
-          left: Math.max(
-            8,
-            selection.rect.left -
-              (wrapRef.current?.getBoundingClientRect().left ?? 0) +
-              (wrapRef.current?.scrollLeft ?? 0),
-          ),
-          zIndex: 30,
-        }}
+        style={toolbarStyle}
       />
     ) : null
 
