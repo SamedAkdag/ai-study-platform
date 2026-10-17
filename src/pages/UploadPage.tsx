@@ -47,7 +47,6 @@ export default function UploadPage() {
     let bookId: string | null = null
 
     try {
-      // pdf.js çağırmadan önce kaydet + aç — tarayıcı gibi hızlı
       const bookTitle = sanitizeForPostgres(
         title.trim() || file.name.replace(/\.pdf$/i, '') || 'Untitled book',
       )
@@ -59,15 +58,18 @@ export default function UploadPage() {
       })
       bookId = created.id
 
-      // Tek kopya → bellek + IndexedDB; okuma sayfası anında URL alsın
       const blob = await cachePdfLocally(bookId, file)
       rememberPdf(bookId, blob)
+
+      setPhase('PDF yükleniyor…')
+      const { uploadBookPdf } = await import('@/lib/bookPdf')
+      const fileUrl = await uploadBookPdf(bookId, file)
 
       await supabase
         .from('books')
         .update({
           subject: subject.trim() || null,
-          file_url: `local:${bookId}`,
+          file_url: fileUrl,
           progress_step: 'imported',
           status: 'ready',
           error_message: null,
@@ -93,18 +95,18 @@ export default function UploadPage() {
 
   return (
     <AppShell autoTour>
-      <section className="mx-auto max-w-2xl space-y-9">
-        <header className="fade-up space-y-3 text-center">
-          <p className="section-label">Studium</p>
-          <h1 className="font-display text-[2.35rem] font-semibold tracking-tight sm:text-4xl">
-            PDF’ni aç, hemen çalış
-          </h1>
-          <p className="muted mx-auto max-w-md text-[0.95rem] leading-relaxed">
-            Yükle — PDF saniyeler içinde açılır. Metin arka planda hazırlanır.
+      <section className="home-compose">
+        <header className="home-hero fade-up">
+          <h1 className="home-hero__brand">Studium</h1>
+          <p className="home-hero__line">PDF’ni aç, hemen çalış.</p>
+          <p className="home-hero__sub">
+            Yükle — sayfalar saniyeler içinde açılır. Anlatım arka planda hazırlanır.
           </p>
         </header>
 
-        <div className="fade-up-delay surface-panel space-y-4 p-5 sm:p-6">
+        <div className={`home-desk fade-up-delay ${dragging ? 'is-dragging' : ''}`}>
+          <div className="home-desk__spine" aria-hidden />
+          <div className="home-desk__ruled" aria-hidden />
           <label
             onDragOver={(e) => {
               e.preventDefault()
@@ -116,9 +118,10 @@ export default function UploadPage() {
               setDragging(false)
               void handleFile(e.dataTransfer.files?.[0] ?? null)
             }}
-            className={`dropzone ${dragging ? 'is-dragging' : ''}`}
+            className={`dropzone dropzone--desk ${dragging ? 'is-dragging' : ''}`}
           >
-            <p className="font-display text-xl font-semibold">
+            <span className="dropzone__kicker">Masaüstü</span>
+            <p className="font-display text-xl font-semibold sm:text-2xl">
               {busy ? phase || 'İşleniyor…' : 'PDF’yi buraya bırak'}
             </p>
             <p className="muted text-sm">veya tıkla · en fazla {MAX_MB}MB</p>
@@ -131,7 +134,7 @@ export default function UploadPage() {
             />
           </label>
 
-          <details className="text-sm">
+          <details className="home-desk__meta text-sm">
             <summary className="muted cursor-pointer select-none text-xs font-semibold">
               İsteğe bağlı: ad ve alan
             </summary>
@@ -157,12 +160,15 @@ export default function UploadPage() {
             </div>
           </details>
 
-          {error && <div className="alert-error">{error}</div>}
+          {error && <div className="alert-error mx-5 mb-5 sm:mx-6">{error}</div>}
         </div>
 
-        <section className="fade-up-delay space-y-2">
-          <p className="section-label">Kitaplık</p>
-          <div className="surface-panel px-5 py-2 sm:px-6">
+        <section className="home-shelf fade-up-late">
+          <div className="home-shelf__head">
+            <p className="section-label mb-0">Kitaplık</p>
+            <p className="muted text-xs">Raftan devam et</p>
+          </div>
+          <div className="home-shelf__panel">
             <LibraryShelf />
           </div>
         </section>

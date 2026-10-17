@@ -71,15 +71,8 @@ export default function GroupChatPanel({
   }
 
   if (!membership) {
-    return (
-      <div className="surface-panel space-y-2 p-4">
-        <p className="text-sm font-semibold">{title}</p>
-        <p className="muted text-xs leading-relaxed">
-          Grup sohbetini görmek ve yazmak için davet linkiyle gruba katılman
-          gerekir.
-        </p>
-      </div>
-    )
+    // Soft gate lives in BlurredChat — avoid cold invite-wall copy here.
+    return null
   }
 
   return (

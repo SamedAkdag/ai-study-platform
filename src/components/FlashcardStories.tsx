@@ -23,6 +23,8 @@ type Props = {
   keyConcepts?: string[] | null
   quiz?: QuizItem[] | null
   aiFlashcards?: FlashcardItem[] | null
+  /** Fired when the learner finishes the last card (deck complete). */
+  onDeckComplete?: () => void
 }
 
 const TONES = [
@@ -51,6 +53,7 @@ export default function FlashcardStories({
   keyConcepts,
   quiz,
   aiFlashcards,
+  onDeckComplete,
 }: Props) {
   const cards = useMemo(
     () =>
@@ -67,18 +70,32 @@ export default function FlashcardStories({
   const [index, setIndex] = useState(0)
   const [flipped, setFlipped] = useState(false)
   const [autoSpeak, setAutoSpeak] = useState(true)
+  const [canScrollMore, setCanScrollMore] = useState(false)
   const [ttsStatus, setTtsStatus] = useState<TtsStatus>(
     isTtsSupported() ? 'idle' : 'unsupported',
   )
   const touchX = useRef<number | null>(null)
   const touchY = useRef<number | null>(null)
   const didScrollCard = useRef(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const indexRef = useRef(0)
   const autoSpeakRef = useRef(autoSpeak)
   const openRef = useRef(open)
   const cardIdRef = useRef<string | null>(null)
   const cardsLenRef = useRef(cards.length)
   const onCloseRef = useRef(onClose)
+  const onDeckCompleteRef = useRef(onDeckComplete)
+  onDeckCompleteRef.current = onDeckComplete
+
+  function updateScrollHint() {
+    const el = scrollRef.current
+    if (!el) {
+      setCanScrollMore(false)
+      return
+    }
+    const remaining = el.scrollHeight - el.scrollTop - el.clientHeight
+    setCanScrollMore(remaining > 8)
+  }
 
   indexRef.current = index
   autoSpeakRef.current = autoSpeak
@@ -101,6 +118,23 @@ export default function FlashcardStories({
     setIndex(0)
     setFlipped(false)
   }, [open, title])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = 0
+    didScrollCard.current = false
+    const frame = window.requestAnimationFrame(() => updateScrollHint())
+    const ro =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => updateScrollHint())
+        : null
+    ro?.observe(el)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      ro?.disconnect()
+    }
+  }, [open, index, flipped, card?.id])
 
   useEffect(() => {
     if (!open) {
@@ -145,6 +179,7 @@ export default function FlashcardStories({
       const next = i + delta
       if (next < 0) return 0
       if (next >= cardsLenRef.current) {
+        onDeckCompleteRef.current?.()
         onCloseRef.current()
         return i
       }
@@ -254,7 +289,9 @@ export default function FlashcardStories({
             />
 
             <article
-              className={`flash-story__card ${flipped ? 'is-flipped' : ''}`}
+              className={`flash-story__card ${flipped ? 'is-flipped' : ''} ${
+                canScrollMore ? 'has-more' : ''
+              }`}
               onClick={(e) => {
                 e.stopPropagation()
                 if (didScrollCard.current) {
@@ -265,11 +302,14 @@ export default function FlashcardStories({
               }}
             >
               <div
+                ref={scrollRef}
                 className="flash-story__scroll"
                 onScroll={() => {
                   didScrollCard.current = true
+                  updateScrollHint()
                 }}
                 onTouchStart={(e) => e.stopPropagation()}
+                onTouchMove={(e) => e.stopPropagation()}
                 onWheel={(e) => e.stopPropagation()}
               >
                 <p className="flash-story__label">
@@ -293,8 +333,10 @@ export default function FlashcardStories({
                   </p>
                 ) : null}
               </div>
-              {flipped && card.back && card.back.length > 120 ? (
-                <p className="flash-story__hint">Kaydırarak devamını oku</p>
+              {canScrollMore ? (
+                <p className="flash-story__hint" aria-hidden>
+                  ↓ Kaydırarak devamını oku
+                </p>
               ) : null}
             </article>
           </div>

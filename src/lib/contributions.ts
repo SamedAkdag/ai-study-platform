@@ -187,6 +187,14 @@ function formatExplanationBlock(p: ExplanationPayload) {
     .join('\n')}`
 }
 
+export function normalizeExample(raw: Partial<ExampleItem>): ExampleItem {
+  const problem = String(raw.problem || '').trim()
+  const solution_steps = Array.isArray(raw.solution_steps)
+    ? raw.solution_steps.map((s) => String(s || '').trim()).filter(Boolean)
+    : []
+  return { problem, solution_steps }
+}
+
 export function normalizeQuiz(raw: Partial<QuizItem>): QuizItem {
   const type = raw.type || 'mcq'
   const question = String(raw.question || '').trim()

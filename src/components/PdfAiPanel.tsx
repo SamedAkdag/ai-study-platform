@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { askAboutSelection } from '@/lib/api'
 import { friendlyAiError } from '@/lib/errors'
+import {
+  findRelatedPassages,
+  type PageSource,
+} from '@/lib/sourceLookup'
 import StudyMarkdown from '@/components/StudyMarkdown'
 import type { PdfSelectionPayload } from '@/components/PdfViewer'
 
@@ -10,6 +14,9 @@ type Props = {
   payload: PdfSelectionPayload | null
   mode: 'ask' | 'summarize' | 'explain' | null
   onClose: () => void
+  /** NotebookLM-style grounding: chapter page excerpts */
+  pageSources?: PageSource[] | null
+  onJumpPage?: (page: number) => void
 }
 
 const MODE_Q: Record<'ask' | 'summarize' | 'explain', string> = {
@@ -29,6 +36,8 @@ export default function PdfAiPanel({
   payload,
   mode,
   onClose,
+  pageSources = null,
+  onJumpPage,
 }: Props) {
   const [answer, setAnswer] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -38,13 +47,17 @@ export default function PdfAiPanel({
     Array<{ role: 'user' | 'assistant'; content: string }>
   >([])
 
-  // Don't re-fire / cancel when book title or chapter id arrives later.
   const metaRef = useRef({ chapterId, chapterTitle })
   metaRef.current = { chapterId, chapterTitle }
 
   const selectionKey = payload
     ? `${payload.page}::${payload.selectedText}`
     : ''
+
+  const sourceHits = useMemo(() => {
+    if (!payload || !pageSources?.length) return []
+    return findRelatedPassages(pageSources, payload.selectedText, 3)
+  }, [payload, pageSources])
 
   useEffect(() => {
     if (!payload || !mode) return
@@ -100,7 +113,6 @@ export default function PdfAiPanel({
     return () => {
       cancelled = true
     }
-    // Only re-run when selection text/page or mode changes — not chapter meta.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [selectionKey, mode])
 
@@ -190,6 +202,29 @@ export default function PdfAiPanel({
           <StudyMarkdown markdown={answer} />
         </div>
       )}
+
+      {sourceHits.length > 0 ? (
+        <div className="pdf-ai-panel__sources">
+          <p className="section-label mb-1.5">Kaynak pasajlar</p>
+          <ul>
+            {sourceHits.map((hit) => (
+              <li key={`${hit.page}-${hit.score}`}>
+                <button
+                  type="button"
+                  className="pdf-ai-panel__source"
+                  onClick={() => onJumpPage?.(hit.page)}
+                >
+                  <span className="pdf-ai-panel__source-page">s. {hit.page}</span>
+                  <span className="pdf-ai-panel__source-ex">
+                    {hit.excerpt.slice(0, 160)}
+                    {hit.excerpt.length > 160 ? '…' : ''}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   )
 }

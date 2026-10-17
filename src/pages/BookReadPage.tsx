@@ -70,6 +70,14 @@ export default function BookReadPage() {
     setSel(null)
     setMode(null)
     setDraftCite(null)
+    if (!bookId) {
+      setNotes([])
+      return
+    }
+    setNotes(loadPdfAnnotations(bookId))
+    void import('@/lib/pdfAnnotationsSync').then((m) =>
+      m.pullPdfAnnotations(bookId).then(setNotes),
+    )
   }, [bookId])
 
   const bookQuery = useQuery({
@@ -323,7 +331,7 @@ export default function BookReadPage() {
     )
 
   return (
-    <AppShell wide bookId={bookId} showBookTimer>
+    <AppShell wide bookId={bookId} showBookTimer studyChrome>
       <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link to="/" className="btn-ghost">
@@ -333,23 +341,30 @@ export default function BookReadPage() {
             {bookQuery.data?.title || 'PDF'}
           </h1>
           <p className="muted mt-1 max-w-xl text-xs leading-relaxed">
-            Orijinal PDF sayfa sayfa çizilir. Studium = metin/markdown
-            görünümü (arka planda hazırlanır).
+            Kaynak paneli: metin görünümü veya orijinal PDF. Sağda Notlar.
           </p>
-          <div className="mt-2.5 flex flex-wrap gap-1.5">
+          <div
+            className="mode-segment mode-segment--secondary mt-2.5"
+            role="tablist"
+            aria-label="Kaynak görünümü"
+          >
             <button
               type="button"
+              role="tab"
+              aria-selected={viewMode === 'study'}
               className={`chip ${viewMode === 'study' ? 'chip-active' : 'chip-idle'}`}
               onClick={() => setViewMode('study')}
             >
-              Studium
+              Metin
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={viewMode === 'original'}
               className={`chip ${viewMode === 'original' ? 'chip-active' : 'chip-idle'}`}
               onClick={() => setViewMode('original')}
             >
-              Orijinal PDF
+              PDF
             </button>
             {importStatus?.phase === 'error' && (
               <button
@@ -527,14 +542,14 @@ export default function BookReadPage() {
                   </p>
                   <ul className="muted mt-2 list-disc space-y-1 pl-4 text-sm leading-relaxed">
                     <li>
-                      Sol panel <strong>Studium</strong> — AI notlarıyla aynı
+                      Sol panel <strong>Kaynak</strong> — metin veya PDF
                       tipografi
                     </li>
                     <li>
                       Metin seç → özetle, sor, <strong>Cite</strong> (APA/IEEE/BibTeX)
                     </li>
                     <li>
-                      Gerekirse <strong>Orijinal PDF</strong>e geç
+                      Gerekirse <strong>PDF</strong> görünümüne geç
                     </li>
                   </ul>
                 </div>

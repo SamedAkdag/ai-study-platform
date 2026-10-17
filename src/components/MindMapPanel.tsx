@@ -31,8 +31,8 @@ import {
 type Props = {
   data: MindMapData
   title?: string
-  /** Chapter study notes — used to narrate the clicked node */
   markdown?: string | null
+  defaultCollapsed?: boolean
 }
 
 const BRANCH_COLORS = [
@@ -61,12 +61,12 @@ function ConceptNode({ data }: NodeProps) {
       style={
         kind === 'branch' && color
           ? {
-              borderColor: `${color}66`,
-              background: `${color}14`,
+              borderColor: `${color}55`,
+              background: `${color}12`,
               color,
             }
           : kind === 'leaf' && color
-            ? { borderColor: `${color}33` }
+            ? { borderColor: `${color}28` }
             : undefined
       }
     >
@@ -86,11 +86,14 @@ const nodeTypes = { concept: ConceptNode }
 type Branch = { label: string; children?: string[] }
 
 function estimateHeight(label: string, kind: 'central' | 'branch' | 'leaf'): number {
-  const charsPerLine = kind === 'leaf' ? 34 : kind === 'branch' ? 26 : 22
-  const lines = Math.max(1, Math.ceil(label.replace(/\s+/g, ' ').trim().length / charsPerLine))
-  const lineH = kind === 'central' ? 20 : 17
-  const pad = kind === 'leaf' ? 20 : 24
-  const maxLines = kind === 'leaf' ? 5 : 3
+  const charsPerLine = kind === 'leaf' ? 28 : kind === 'branch' ? 22 : 18
+  const lines = Math.max(
+    1,
+    Math.ceil(label.replace(/\s+/g, ' ').trim().length / charsPerLine),
+  )
+  const lineH = kind === 'central' ? 19 : 16
+  const pad = kind === 'leaf' ? 18 : 22
+  const maxLines = kind === 'leaf' ? 4 : 3
   return pad + Math.min(lines, maxLines) * lineH
 }
 
@@ -103,64 +106,37 @@ function tidyBranches(raw: Branch[]): Branch[] {
     const key = label.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-
-    const childSeen = new Set<string>()
-    const children: string[] = []
-    for (const c of b.children ?? []) {
-      const cl = String(c || '').replace(/\s+/g, ' ').trim()
-      const ck = cl.toLowerCase()
-      if (!cl || ck === key || childSeen.has(ck)) continue
-      childSeen.add(ck)
-      children.push(cl)
-      if (children.length >= 8) break
-    }
+    // Flat map only — no leaf subgroups on the canvas (detail sheet can still list them)
+    const children = (b.children ?? [])
+      .map((c) => String(c || '').replace(/\s+/g, ' ').trim())
+      .filter((cl) => cl && cl.toLowerCase() !== key)
+      .slice(0, 8)
     out.push({ label, children })
     if (out.length >= 8) break
   }
   return out
 }
 
+/** Flat L→R: merkez + ana dallar only (no leaf clutter). */
 function layoutMindMap(data: MindMapData): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = []
   const edges: Edge[] = []
   const branches = tidyBranches(data.branches ?? [])
 
-  const COL = { central: 16, branch: 250, leaf: 520 }
-  const ROW_GAP = 14
-  const BRANCH_GAP = 22
+  const COL = { central: 24, branch: 260 }
+  const BRANCH_GAP = 16
   const centralLabel = String(data.central || 'Konu').replace(/\s+/g, ' ').trim()
 
-  type LeafLayout = { label: string; h: number }
-  type BranchLayout = {
-    label: string
-    h: number
-    kids: LeafLayout[]
-    blockH: number
-  }
-
-  const laid: BranchLayout[] = branches.map((b) => {
-    const kids = (b.children ?? []).map((label) => ({
-      label,
-      h: estimateHeight(label, 'leaf'),
-    }))
-    const kidsH =
-      kids.length === 0
-        ? 0
-        : kids.reduce((s, k) => s + k.h, 0) + (kids.length - 1) * ROW_GAP
-    const branchH = estimateHeight(b.label, 'branch')
-    return {
-      label: b.label,
-      h: branchH,
-      kids,
-      blockH: Math.max(branchH, kidsH || branchH),
-    }
-  })
+  const laid = branches.map((b) => ({
+    label: b.label,
+    h: estimateHeight(b.label, 'branch'),
+    children: b.children ?? [],
+  }))
 
   const totalH =
-    laid.reduce((s, b) => s + b.blockH, 0) +
-    Math.max(0, laid.length - 1) * BRANCH_GAP
+    laid.reduce((s, b) => s + b.h, 0) + Math.max(0, laid.length - 1) * BRANCH_GAP
 
-  const startY = 20
+  const startY = 12
   const centralH = estimateHeight(centralLabel, 'central')
 
   nodes.push({
@@ -175,74 +151,42 @@ function layoutMindMap(data: MindMapData): { nodes: Node[]; edges: Edge[] } {
       kind: 'central',
       children: branches.map((b) => b.label),
     } satisfies NodeData,
-    draggable: true,
+    draggable: false,
   })
 
   let cursorY = startY
   laid.forEach((branch, i) => {
     const color = BRANCH_COLORS[i % BRANCH_COLORS.length]!
     const bid = `b-${i}`
-    const by = cursorY + branch.blockH / 2 - branch.h / 2
-    const childLabels = branch.kids.map((k) => k.label)
 
     nodes.push({
       id: bid,
       type: 'concept',
-      position: { x: COL.branch, y: by },
+      position: { x: COL.branch, y: cursorY },
       data: {
         label: branch.label,
         kind: 'branch',
         color,
-        children: childLabels,
+        children: branch.children,
       } satisfies NodeData,
-      draggable: true,
+      draggable: false,
     })
 
     edges.push({
       id: `e-c-${i}`,
       source: 'central',
       target: bid,
-      type: 'bezier',
-      style: { stroke: color, strokeWidth: 1.75 },
+      type: 'smoothstep',
+      style: { stroke: color, strokeWidth: 1.5, opacity: 0.85 },
       markerEnd: {
         type: MarkerType.ArrowClosed,
-        width: 14,
-        height: 14,
+        width: 12,
+        height: 12,
         color,
       },
     })
 
-    const kidsH =
-      branch.kids.length === 0
-        ? 0
-        : branch.kids.reduce((s, k) => s + k.h, 0) +
-          (branch.kids.length - 1) * ROW_GAP
-    let ky = cursorY + Math.max(0, (branch.blockH - kidsH) / 2)
-
-    branch.kids.forEach((child, j) => {
-      const kid = `b-${i}-c-${j}`
-      nodes.push({
-        id: kid,
-        type: 'concept',
-        position: { x: COL.leaf, y: ky },
-        data: {
-          label: child.label,
-          kind: 'leaf',
-          color,
-        } satisfies NodeData,
-        draggable: true,
-      })
-      edges.push({
-        id: `e-${i}-${j}`,
-        source: bid,
-        target: kid,
-        type: 'bezier',
-        style: { stroke: `${color}99`, strokeWidth: 1.3 },
-      })
-      ky += child.h + ROW_GAP
-    })
-
-    cursorY += branch.blockH + BRANCH_GAP
+    cursorY += branch.h + BRANCH_GAP
   })
 
   return { nodes, edges }
@@ -257,7 +201,7 @@ const KIND_LABEL: Record<string, string> = {
 function useCoarsePointer() {
   const [coarse, setCoarse] = useState(false)
   useEffect(() => {
-    const mq = window.matchMedia('(pointer: coarse), (max-width: 720px)')
+    const mq = window.matchMedia('(pointer: coarse), (max-width: 767px)')
     const apply = () => setCoarse(mq.matches)
     apply()
     mq.addEventListener('change', apply)
@@ -266,8 +210,30 @@ function useCoarsePointer() {
   return coarse
 }
 
-/** Interactive concept map — click a node for a short topic sheet + TTS. */
-export default function MindMapPanel({ data, title, markdown }: Props) {
+/** Fill the canvas with the graph — no empty void, no wild zoom jumps. */
+function fitCalm(
+  rf: ReactFlowInstance | null,
+  opts?: { animate?: boolean; coarse?: boolean },
+) {
+  if (!rf) return
+  const animate = opts?.animate ?? false
+  const coarse = opts?.coarse ?? false
+  void rf.fitView({
+    padding: coarse ? 0.1 : 0.08,
+    includeHiddenNodes: false,
+    minZoom: 0.55,
+    maxZoom: 1.45,
+    duration: animate ? 220 : 0,
+  })
+}
+
+/** Interactive concept map — NotebookLM-style calm zoom & fill. */
+export default function MindMapPanel({
+  data,
+  title,
+  markdown,
+  defaultCollapsed = false,
+}: Props) {
   const branches = useMemo(
     () => tidyBranches(data.branches ?? []),
     [data.branches],
@@ -276,9 +242,36 @@ export default function MindMapPanel({ data, title, markdown }: Props) {
   const [detail, setDetail] = useState<MindMapTopicDetail | null>(null)
   const [speaking, setSpeaking] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const [rf, setRf] = useState<ReactFlowInstance | null>(null)
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  const rfRef = useRef<ReactFlowInstance | null>(null)
+  const canvasRef = useRef<HTMLDivElement | null>(null)
   const detailRef = useRef<HTMLElement | null>(null)
   const coarse = useCoarsePointer()
+
+  const scheduleFit = useCallback(
+    (animate = false) => {
+      // Wait for layout/paint so bounds are real (avoids empty fit)
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          fitCalm(rfRef.current, { animate, coarse })
+        })
+      })
+    },
+    [coarse],
+  )
+
+  useEffect(() => {
+    if (collapsed) return
+    scheduleFit(false)
+  }, [collapsed, nodes, edges, expanded, scheduleFit])
+
+  useEffect(() => {
+    if (collapsed || !canvasRef.current) return
+    const el = canvasRef.current
+    const ro = new ResizeObserver(() => scheduleFit(false))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [collapsed, expanded, scheduleFit])
 
   useEffect(() => {
     if (!expanded) return
@@ -290,9 +283,9 @@ export default function MindMapPanel({ data, title, markdown }: Props) {
   }, [expanded])
 
   useEffect(() => {
-    if (!detail || expanded) return
+    if (!detail || expanded || coarse) return
     detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  }, [detail, expanded])
+  }, [detail, expanded, coarse])
 
   const openDetail = useCallback(
     (d: NodeData) => {
@@ -335,37 +328,43 @@ export default function MindMapPanel({ data, title, markdown }: Props) {
     setDetail(null)
   }
 
-  function fitMap() {
-    void rf?.fitView({ padding: coarse ? 0.18 : 0.22, maxZoom: 1, duration: 280 })
-  }
-
   if (!branches.length) return null
 
   const canvas = (
-    <div className={`mind-map-canvas ${expanded ? 'mind-map-canvas--expanded' : ''}`}>
+    <div
+      ref={canvasRef}
+      className={`mind-map-canvas ${expanded ? 'mind-map-canvas--expanded' : ''}`}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        onInit={setRf}
-        fitView
-        fitViewOptions={{ padding: coarse ? 0.16 : 0.22, maxZoom: 1 }}
-        minZoom={0.2}
-        maxZoom={1.5}
+        onInit={(instance) => {
+          rfRef.current = instance
+          scheduleFit(false)
+        }}
+        minZoom={0.45}
+        maxZoom={1.6}
         proOptions={{ hideAttribution: true }}
-        nodesDraggable={!coarse}
+        nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable
-        panOnScroll={!coarse}
-        zoomOnScroll={!coarse}
+        panOnScroll={false}
+        zoomOnScroll={false}
         zoomOnPinch
+        zoomOnDoubleClick={false}
         panOnDrag
         preventScrolling
         onNodeClick={onNodeClick}
-        defaultEdgeOptions={{ type: 'bezier' }}
+        defaultEdgeOptions={{ type: 'smoothstep' }}
+        attributionPosition="bottom-left"
       >
-        <Background gap={20} color="rgba(22,37,50,0.05)" />
-        <Controls showInteractive={false} />
+        <Background
+          gap={24}
+          size={1}
+          color="rgba(22, 37, 50, 0.045)"
+        />
+        <Controls showInteractive={false} showFitView={false} />
       </ReactFlow>
     </div>
   )
@@ -439,92 +438,114 @@ export default function MindMapPanel({ data, title, markdown }: Props) {
       <div className="mind-map-panel__head">
         <div>
           <p className="section-label mb-0">Konu haritası</p>
-          <p className="muted text-[11px]">
-            {coarse
-              ? 'Parmakla kaydır · iki parmak yakınlaştır · dal seç veya düğüme dokun'
-              : 'Düğüme tıkla → anlatım · tekerlek yakınlaştır · sürükle'}
-          </p>
+          {!collapsed && (
+            <p className="muted text-[11px]">
+              {coarse
+                ? 'Sürükle · iki parmak yakınlaştır · düğüme dokun'
+                : 'Sürükle ile gez · +/− ile yakınlaştır · düğüme tıkla'}
+            </p>
+          )}
         </div>
         <div className="mind-map-panel__tools">
-          <button type="button" className="btn-ghost text-xs" onClick={fitMap}>
-            Sığdır
-          </button>
           <button
             type="button"
             className="btn-ghost text-xs"
             onClick={() => {
-              setExpanded((v) => !v)
-              window.setTimeout(fitMap, 80)
+              const next = !collapsed
+              setCollapsed(next)
+              if (!next) scheduleFit(false)
             }}
           >
-            {expanded ? 'Küçült' : 'Tam ekran'}
+            {collapsed ? 'Göster' : 'Gizle'}
           </button>
+          {!collapsed && (
+            <>
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => fitCalm(rfRef.current, { animate: true, coarse })}
+              >
+                Sığdır
+              </button>
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => {
+                  setExpanded((v) => !v)
+                }}
+              >
+                {expanded ? 'Küçült' : 'Tam ekran'}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="mind-map-jumps" role="list">
-        <button
-          type="button"
-          className="mind-map-jump"
-          role="listitem"
-          onClick={() =>
-            openDetail({
-              label: String(data.central || title || 'Konu'),
-              kind: 'central',
-              children: branches.map((b) => b.label),
-            })
-          }
-        >
-          Merkez
-        </button>
-        {branches.map((b, i) => (
-          <button
-            key={`${b.label}-${i}`}
-            type="button"
-            className="mind-map-jump"
-            role="listitem"
-            style={{
-              borderColor: `${BRANCH_COLORS[i % BRANCH_COLORS.length]}55`,
-            }}
-            onClick={() =>
-              openDetail({
-                label: b.label,
-                kind: 'branch',
-                children: b.children,
-                color: BRANCH_COLORS[i % BRANCH_COLORS.length],
-              })
-            }
-          >
-            <span
-              className="mind-map-legend__dot"
-              style={{ background: BRANCH_COLORS[i % BRANCH_COLORS.length] }}
-            />
-            {b.label.length > 28 ? `${b.label.slice(0, 26)}…` : b.label}
-          </button>
-        ))}
-      </div>
-
-      {canvas}
-
-      {/* Desktop / inline detail; mobile sheet portals below */}
-      {detail && !coarse ? detailCard : null}
-      {detail && coarse
-        ? createPortal(
-            <div
-              className="mind-map-sheet-backdrop"
-              onClick={closeDetail}
-              role="presentation"
+      {collapsed ? null : (
+        <>
+          <div className="mind-map-jumps" role="list">
+            <button
+              type="button"
+              className="mind-map-jump"
+              role="listitem"
+              onClick={() =>
+                openDetail({
+                  label: String(data.central || title || 'Konu'),
+                  kind: 'central',
+                  children: branches.map((b) => b.label),
+                })
+              }
             >
-              <div
-                onClick={(e) => e.stopPropagation()}
-                role="presentation"
+              Merkez
+            </button>
+            {branches.map((b, i) => (
+              <button
+                key={`${b.label}-${i}`}
+                type="button"
+                className="mind-map-jump"
+                role="listitem"
+                style={{
+                  borderColor: `${BRANCH_COLORS[i % BRANCH_COLORS.length]}55`,
+                }}
+                onClick={() =>
+                  openDetail({
+                    label: b.label,
+                    kind: 'branch',
+                    children: b.children,
+                    color: BRANCH_COLORS[i % BRANCH_COLORS.length],
+                  })
+                }
               >
-                {detailCard}
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
+                <span
+                  className="mind-map-legend__dot"
+                  style={{
+                    background: BRANCH_COLORS[i % BRANCH_COLORS.length],
+                  }}
+                />
+                {b.label.length > 28 ? `${b.label.slice(0, 26)}…` : b.label}
+              </button>
+            ))}
+          </div>
+
+          {canvas}
+
+          {detail && !coarse ? detailCard : null}
+          {detail && coarse
+            ? createPortal(
+                <div
+                  className="mind-map-sheet-backdrop"
+                  onClick={closeDetail}
+                  role="presentation"
+                >
+                  <div onClick={(e) => e.stopPropagation()} role="presentation">
+                    {detailCard}
+                  </div>
+                </div>,
+                document.body,
+              )
+            : null}
+        </>
+      )}
     </div>
   )
 

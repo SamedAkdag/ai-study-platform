@@ -27,14 +27,14 @@ const STEPS: Step[] = [
   },
   {
     id: 'ask',
-    title: 'Anlamadığın yeri seç, AI’ya sor',
-    body: 'PDF veya anlatımda metni seç → AI’ya sor. Cevabı nota da ekleyebilirsin. Telefonda da çalışır.',
+    title: 'Anlamadığın yeri seç',
+    body: 'Kaynak’ta metni seç → AI’ya sor, Cite veya Vurgula. Cevabı “Kitaba ekle” ile sayfanın altına gömersin.',
     visual: 'ask',
   },
   {
     id: 'quiz',
-    title: 'Alıştır: Flash, quiz, örnek',
-    body: 'Mini quiz ve Flash Stories ile kendini kontrol et. Skoru kopyalayabilir veya gruba gönderebilirsin.',
+    title: 'Alıştır: sınav, çözümlü, Flash',
+    body: 'Ünite sınavı ve çözümlü örneklerle kendini kontrol et. Flash isteğe bağlı. Skoru kopyalayabilir veya gruba gönderebilirsin.',
     visual: 'quiz',
   },
   {
@@ -60,6 +60,10 @@ function TourVisual({ kind }: { kind: Step['visual'] }) {
     return (
       <div className="tour-visual" aria-hidden>
         <div className="tour-mock-chips">
+          <span className="tour-chip on">Kaynak</span>
+          <span className="tour-chip">Notlar</span>
+        </div>
+        <div className="tour-mock-chips" style={{ marginTop: '0.4rem' }}>
           <span className="tour-chip on">PDF</span>
           <span className="tour-chip">Anlatım</span>
           <span className="tour-chip">Alıştır</span>
@@ -79,7 +83,7 @@ function TourVisual({ kind }: { kind: Step['visual'] }) {
         <p className="tour-mock-select">
           …temettü hakkı <mark>nama yazılı pay sahiplerine</mark> aittir…
         </p>
-        <div className="tour-mock-btn">Bu kısım hakkında sor</div>
+        <div className="tour-mock-btn">AI’ya sor · Cite · Vurgula</div>
       </div>
     )
   }

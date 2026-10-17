@@ -8,6 +8,25 @@ export function bookPdfStoragePath(bookId: string) {
   return `${bookId}/original.pdf`
 }
 
+async function uploadWithRetry(
+  path: string,
+  file: File | Blob,
+  attempts = 3,
+): Promise<{ error: Error | null }> {
+  let last: Error | null = null
+  for (let i = 0; i < attempts; i++) {
+    const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
+      cacheControl: '3600',
+      contentType: 'application/pdf',
+      upsert: true,
+    })
+    if (!error) return { error: null }
+    last = new Error(error.message)
+    await new Promise((r) => window.setTimeout(r, 400 * (i + 1)))
+  }
+  return { error: last }
+}
+
 /** Upload original PDF to Storage + local cache; save path on books.file_url. */
 export async function uploadBookPdf(bookId: string, file: File): Promise<string> {
   const path = bookPdfStoragePath(bookId)
@@ -15,11 +34,7 @@ export async function uploadBookPdf(bookId: string, file: File): Promise<string>
   const cached = await cachePdfLocally(bookId, file)
   rememberPdf(bookId, cached)
 
-  const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
-    cacheControl: '3600',
-    contentType: 'application/pdf',
-    upsert: true,
-  })
+  const { error } = await uploadWithRetry(path, file, 3)
 
   if (error) {
     console.warn('PDF storage upload failed; using local cache only', error)
@@ -33,6 +48,18 @@ export async function uploadBookPdf(bookId: string, file: File): Promise<string>
     .eq('id', bookId)
   if (updErr) console.warn('file_url update failed', updErr)
 
+  return path
+}
+
+/** Best-effort re-upload when book is still local-only but PDF is cached. */
+export async function tryPromoteLocalPdf(
+  bookId: string,
+  file: File | Blob,
+): Promise<string | null> {
+  const path = bookPdfStoragePath(bookId)
+  const { error } = await uploadWithRetry(path, file, 2)
+  if (error) return null
+  await supabase.from('books').update({ file_url: path }).eq('id', bookId)
   return path
 }
 

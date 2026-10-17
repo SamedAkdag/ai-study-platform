@@ -7,6 +7,11 @@ import {
 } from 'react'
 import { askAboutSelection, updateChapterMarkdownField } from '@/lib/api'
 import { insertAiNoteAfterSelection } from '@/lib/aiNotes'
+import {
+  fetchChapterMessages,
+  saveChapterExchange,
+} from '@/lib/chapterMessages'
+import type { Message } from '@/types/database'
 import { useTts } from '@/hooks/useTts'
 import {
   preserveSelectionOnPointerDown,
@@ -24,6 +29,8 @@ type Props = {
   depth: Depth
   onMarkdownSaved?: () => void
   onShowInBook?: (selectedText: string) => void
+  /** Pin selected Anlatım text into the PDF under the best matching passage. */
+  onLinkToPdf?: (selectedText: string) => void
 }
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
@@ -57,7 +64,7 @@ function isCoarsePointer(): boolean {
   if (typeof window === 'undefined') return false
   return (
     window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
-    window.matchMedia('(max-width: 720px)').matches
+    window.matchMedia('(max-width: 767px)').matches
   )
 }
 
@@ -68,6 +75,7 @@ export default function ExplanationWithInlineChat({
   depth,
   onMarkdownSaved,
   onShowInBook,
+  onLinkToPdf,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const articleRef = useRef<HTMLElement>(null)
@@ -75,11 +83,23 @@ export default function ExplanationWithInlineChat({
     useTextSelection(articleRef)
   const [bubbles, setBubbles] = useState<Bubble[]>([])
   const [localMarkdown, setLocalMarkdown] = useState(markdown)
+  const [history, setHistory] = useState<Message[]>([])
+  const [historyOpen, setHistoryOpen] = useState(false)
   const tts = useTts()
 
   useEffect(() => {
     setLocalMarkdown(markdown)
   }, [markdown])
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchChapterMessages(chapterId).then((rows) => {
+      if (!cancelled) setHistory(rows)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [chapterId])
 
   useEffect(() => {
     return () => tts.stop()
@@ -176,6 +196,14 @@ export default function ExplanationWithInlineChat({
             : b,
         ),
       )
+      void saveChapterExchange({
+        chapterId,
+        question,
+        answer,
+        selectionQuote: bubble.selectedText,
+      }).then(() =>
+        fetchChapterMessages(chapterId).then(setHistory),
+      )
     } catch (err) {
       setBubbles((prev) =>
         prev.map((b) =>
@@ -263,6 +291,39 @@ export default function ExplanationWithInlineChat({
         Metni seç → sor veya sesli oku. Cevabı nota ekleyebilirsin.
       </p>
 
+      {history.length > 0 ? (
+        <details
+          className="chapter-chat-history mb-4"
+          open={historyOpen}
+          onToggle={(e) =>
+            setHistoryOpen((e.target as HTMLDetailsElement).open)
+          }
+        >
+          <summary className="chapter-chat-history__summary">
+            Önceki sorular ({Math.ceil(history.length / 2)})
+          </summary>
+          <ul className="chapter-chat-history__list">
+            {history.map((m) => (
+              <li
+                key={m.id}
+                className={`chapter-chat-history__item is-${m.role}`}
+              >
+                <span className="chapter-chat-history__role">
+                  {m.role === 'user' ? 'Sen' : 'AI'}
+                </span>
+                {m.selection_quote && m.role === 'user' ? (
+                  <p className="chapter-chat-history__quote">
+                    “{m.selection_quote.slice(0, 120)}
+                    {m.selection_quote.length > 120 ? '…' : ''}”
+                  </p>
+                ) : null}
+                <p className="chapter-chat-history__body">{m.content}</p>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
       <div className="mb-4">
         <TtsControls
           tts={tts}
@@ -326,6 +387,24 @@ export default function ExplanationWithInlineChat({
             >
               Sesli oku
             </button>
+            {onLinkToPdf && (
+              <button
+                type="button"
+                onPointerDown={onToolbarPointerDown}
+                onPointerUp={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  const text =
+                    snapshot()?.selectedText ?? askBar.selectedText
+                  onLinkToPdf(text)
+                  clearSelection()
+                  window.getSelection()?.removeAllRanges()
+                }}
+                className="chip chip-active !text-xs"
+              >
+                PDF’ye ekle
+              </button>
+            )}
             {onShowInBook && (
               <button
                 type="button"

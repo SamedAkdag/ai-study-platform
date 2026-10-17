@@ -18,7 +18,7 @@ type Props = {
 
 /**
  * Floats under a PDF/Studium selection.
- * Primaries stay one tap: Sor · Cite · Vurgula · ⋯
+ * Primaries: Sor · Cite · Vurgula · ⋯ (Özet / Açıkla / Not / Gizle)
  */
 export default function SelectionActionBar({
   preview,
@@ -72,9 +72,9 @@ export default function SelectionActionBar({
           type="button"
           className="chip chip-idle"
           onPointerDown={arm}
-          onClick={() => run('summarize')}
+          onClick={() => run('cite')}
         >
-          Özetle
+          Cite
         </button>
         <button
           type="button"
@@ -97,11 +97,11 @@ export default function SelectionActionBar({
           </button>
           {moreOpen && (
             <div className="sel-menu__panel">
+              <button type="button" onPointerDown={arm} onClick={() => run('summarize')}>
+                Özetle
+              </button>
               <button type="button" onPointerDown={arm} onClick={() => run('explain')}>
                 Açıkla
-              </button>
-              <button type="button" onPointerDown={arm} onClick={() => run('cite')}>
-                Cite
               </button>
               <button type="button" onPointerDown={arm} onClick={() => run('note')}>
                 Not ekle

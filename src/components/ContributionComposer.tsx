@@ -16,6 +16,8 @@ type Props = {
   membership: GroupMember
   contextExcerpt?: string
   onApplied?: () => void
+  /** Compact right-drawer chrome */
+  variant?: 'inline' | 'drawer'
 }
 
 type Mode = 'quiz' | 'example' | 'explanation'
@@ -28,6 +30,7 @@ export default function ContributionComposer({
   membership,
   contextExcerpt = '',
   onApplied,
+  variant = 'inline',
 }: Props) {
   const queryClient = useQueryClient()
   const [source, setSource] = useState<Source>('manual')
@@ -194,19 +197,30 @@ export default function ContributionComposer({
     submit.mutate()
   }
 
-  return (
-    <div className="surface-panel space-y-3 p-4 sm:p-5">
-      <div>
-        <p className="text-sm font-semibold">İçerik ekle</p>
-        <p className="muted mt-1 text-xs leading-relaxed">
-          Manuel yaz veya AI taslak üretsin — sonra düzenleyip gönder.
-          {needsReview ? ' Yazma rolü: admin onayı gerekir.' : ''}
-        </p>
-      </div>
+  const shell =
+    variant === 'drawer' ? 'contrib-form' : 'surface-panel space-y-3 p-4 sm:p-5'
 
-      <div className="flex flex-wrap gap-2">
+  return (
+    <div className={shell}>
+      {variant !== 'drawer' && (
+        <div>
+          <p className="text-sm font-semibold">İçerik ekle</p>
+          <p className="muted mt-1 text-xs leading-relaxed">
+            Manuel yaz veya AI taslak üretsin — sonra düzenleyip gönder.
+            {needsReview ? ' Yazma rolü: admin onayı gerekir.' : ''}
+          </p>
+        </div>
+      )}
+
+      <div
+        className="mode-segment mode-segment--secondary contrib-form__seg"
+        role="tablist"
+        aria-label="Kaynak"
+      >
         <button
           type="button"
+          role="tab"
+          aria-selected={source === 'manual'}
           className={`chip ${source === 'manual' ? 'chip-active' : 'chip-idle'}`}
           onClick={() => setSource('manual')}
         >
@@ -214,14 +228,20 @@ export default function ContributionComposer({
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={source === 'ai'}
           className={`chip ${source === 'ai' ? 'chip-active' : 'chip-idle'}`}
           onClick={() => setSource('ai')}
         >
-          AI ile taslak
+          AI taslak
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div
+        className="mode-segment mode-segment--secondary contrib-form__seg"
+        role="tablist"
+        aria-label="Tür"
+      >
         {(
           [
             ['quiz', 'Quiz'],
@@ -232,6 +252,8 @@ export default function ContributionComposer({
           <button
             key={id}
             type="button"
+            role="tab"
+            aria-selected={mode === id}
             className={`chip ${mode === id ? 'chip-active' : 'chip-idle'}`}
             onClick={() => setMode(id)}
           >
@@ -240,54 +262,49 @@ export default function ContributionComposer({
         ))}
       </div>
 
-      <form onSubmit={onSubmit} className="space-y-3">
+      {mode === 'quiz' && (
+        <div
+          className="mode-segment mode-segment--secondary contrib-form__seg"
+          role="tablist"
+          aria-label="Soru tipi"
+        >
+          {(['mcq', 'true_false', 'short'] as QuizType[]).map((t) => (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              aria-selected={quizType === t}
+              className={`chip ${quizType === t ? 'chip-active' : 'chip-idle'}`}
+              onClick={() => setQuizType(t)}
+            >
+              {quizTypeLabel(t)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <form onSubmit={onSubmit} className="contrib-form__fields space-y-3">
         {source === 'ai' ? (
           <>
-            {mode === 'quiz' && (
-              <div className="flex flex-wrap gap-2">
-                {(['mcq', 'true_false', 'short'] as QuizType[]).map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    className={`chip ${quizType === t ? 'chip-active' : 'chip-idle'}`}
-                    onClick={() => setQuizType(t)}
-                  >
-                    {quizTypeLabel(t)}
-                  </button>
-                ))}
-              </div>
-            )}
             <textarea
               className="field text-sm"
               rows={3}
-              placeholder="AI’ye ne üretsin? Örn. temettü hakları hakkında zor bir soru"
+              placeholder="AI’ye ipucu — örn. temettü hakkında zor soru"
               value={aiHint}
               onChange={(e) => setAiHint(e.target.value)}
             />
             <button
               type="submit"
-              className="btn-primary text-sm"
+              className="btn-primary w-full text-sm"
               disabled={aiSuggest.isPending}
             >
-              {aiSuggest.isPending ? 'Üretiliyor…' : 'AI taslak oluştur'}
+              {aiSuggest.isPending ? 'Üretiliyor…' : 'Taslak oluştur'}
             </button>
           </>
         ) : (
           <>
             {mode === 'quiz' && (
               <>
-                <div className="flex flex-wrap gap-2">
-                  {(['mcq', 'true_false', 'short'] as QuizType[]).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      className={`chip ${quizType === t ? 'chip-active' : 'chip-idle'}`}
-                      onClick={() => setQuizType(t)}
-                    >
-                      {quizTypeLabel(t)}
-                    </button>
-                  ))}
-                </div>
                 <textarea
                   className="field text-sm"
                   rows={2}
@@ -305,6 +322,7 @@ export default function ContributionComposer({
                           name="correct"
                           checked={correctIndex === i}
                           onChange={() => setCorrectIndex(i)}
+                          aria-label={`Doğru şık ${i + 1}`}
                         />
                         <input
                           className="field !py-2 text-sm"
@@ -323,23 +341,21 @@ export default function ContributionComposer({
                   </div>
                 )}
                 {quizType === 'true_false' && (
-                  <div className="flex gap-3 text-sm">
-                    <label className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        checked={correctIndex === 0}
-                        onChange={() => setCorrectIndex(0)}
-                      />
+                  <div className="contrib-form__tf">
+                    <button
+                      type="button"
+                      className={`chip ${correctIndex === 0 ? 'chip-active' : 'chip-idle'}`}
+                      onClick={() => setCorrectIndex(0)}
+                    >
                       Doğru
-                    </label>
-                    <label className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        checked={correctIndex === 1}
-                        onChange={() => setCorrectIndex(1)}
-                      />
+                    </button>
+                    <button
+                      type="button"
+                      className={`chip ${correctIndex === 1 ? 'chip-active' : 'chip-idle'}`}
+                      onClick={() => setCorrectIndex(1)}
+                    >
                       Yanlış
-                    </label>
+                    </button>
                   </div>
                 )}
                 {quizType === 'short' && (
@@ -382,7 +398,11 @@ export default function ContributionComposer({
 
             {mode === 'explanation' && (
               <>
-                <div className="flex flex-wrap gap-2">
+                <div
+                  className="mode-segment mode-segment--secondary contrib-form__seg"
+                  role="tablist"
+                  aria-label="Derinlik"
+                >
                   {(
                     [
                       ['brief', 'Özet'],
@@ -393,6 +413,8 @@ export default function ContributionComposer({
                     <button
                       key={id}
                       type="button"
+                      role="tab"
+                      aria-selected={explDepth === id}
                       className={`chip ${explDepth === id ? 'chip-active' : 'chip-idle'}`}
                       onClick={() => setExplDepth(id)}
                     >
@@ -419,7 +441,7 @@ export default function ContributionComposer({
 
             <button
               type="submit"
-              className="btn-primary text-sm"
+              className="btn-primary w-full text-sm"
               disabled={submit.isPending}
             >
               {submit.isPending
@@ -430,7 +452,7 @@ export default function ContributionComposer({
             </button>
           </>
         )}
-        {note && <p className="muted text-xs">{note}</p>}
+        {note && <p className="muted text-xs leading-relaxed">{note}</p>}
       </form>
     </div>
   )

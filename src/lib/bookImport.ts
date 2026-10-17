@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { cachePageTexts, loadCachedPdf } from './pdfCache'
-import { bookPdfStoragePath } from './bookPdf'
+import { uploadBookPdf } from './bookPdf'
 import { pageNeedsOcr } from './pageTextQuality'
 import type { PageText } from './slidingWindow'
 
@@ -88,25 +88,9 @@ async function runProgressiveImport(input: {
   })
 
   const uploadPromise = input.uploadFile
-    ? (async () => {
-        const path = bookPdfStoragePath(bookId)
-        const { error } = await supabase.storage
-          .from('book-pdfs')
-          .upload(path, input.uploadFile!, {
-            cacheControl: '3600',
-            contentType: 'application/pdf',
-            upsert: true,
-          })
-        if (error) {
-          console.warn('PDF storage upload failed', error)
-          await supabase
-            .from('books')
-            .update({ file_url: `local:${bookId}` })
-            .eq('id', bookId)
-          return
-        }
-        await supabase.from('books').update({ file_url: path }).eq('id', bookId)
-      })()
+    ? uploadBookPdf(bookId, input.uploadFile).catch((err) => {
+        console.warn('PDF storage upload failed', err)
+      })
     : Promise.resolve()
 
   try {

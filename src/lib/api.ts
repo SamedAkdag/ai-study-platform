@@ -10,6 +10,7 @@ import type {
   QuizItem,
 } from '@/types/database'
 import { extractFunctionsError } from './functionsError'
+import { normalizeExample, normalizeQuiz } from './contributions'
 
 const MIN_WINDOW_CHARS = 120
 const RETRY_PAD_PAGES = 2
@@ -625,12 +626,24 @@ export async function askAboutSelection(input: {
   return data.answer as string
 }
 
+export type PracticeDifficulty = 'easy' | 'medium' | 'hard'
+
+export function practiceDifficultyLabel(d?: PracticeDifficulty | null): string {
+  if (d === 'easy') return 'Kolay'
+  if (d === 'hard') return 'Zor'
+  if (d === 'medium') return 'Orta'
+  return ''
+}
+
 export async function suggestContribution(input: {
   kind: 'quiz' | 'example' | 'explanation'
   chapterTitle: string
   hint: string
   quizType?: string
   context?: string
+  difficulty?: PracticeDifficulty
+  count?: number
+  avoid?: string[]
 }) {
   const { data, error } = await supabase.functions.invoke(
     'suggest-contribution',
@@ -641,6 +654,9 @@ export async function suggestContribution(input: {
         hint: input.hint,
         quiz_type: input.quizType || 'mcq',
         context: input.context || '',
+        difficulty: input.difficulty || 'medium',
+        count: input.count ?? 1,
+        avoid: input.avoid ?? [],
       },
     },
   )
@@ -650,4 +666,54 @@ export async function suggestContribution(input: {
     throw new Error('AI öneri boş döndü')
   }
   return data.payload as Record<string, unknown>
+}
+
+/** On-demand Alıştır: more quiz / solved examples at a chosen difficulty. */
+export async function generateMorePractice(input: {
+  kind: 'quiz' | 'example'
+  chapterTitle: string
+  difficulty: PracticeDifficulty
+  count?: number
+  context?: string
+  avoid?: string[]
+}): Promise<{ quiz?: QuizItem[]; examples?: ExampleItem[] }> {
+  const count = Math.min(10, Math.max(1, input.count ?? 5))
+  const payload = await suggestContribution({
+    kind: input.kind,
+    chapterTitle: input.chapterTitle,
+    hint: `Alıştır genişletme · zorluk ${input.difficulty} · ${count} madde`,
+    quizType: 'mcq',
+    context: input.context || '',
+    difficulty: input.difficulty,
+    count,
+    avoid: input.avoid,
+  })
+
+  const rows: unknown[] = Array.isArray(
+    (payload as { items?: unknown }).items,
+  )
+    ? ((payload as { items: unknown[] }).items)
+    : [payload]
+
+  if (input.kind === 'quiz') {
+    const quiz = rows
+      .map((row) => ({
+        ...normalizeQuiz(row as Partial<QuizItem>),
+        difficulty: input.difficulty,
+      }))
+      .filter((q) => q.question.length >= 4)
+      .slice(0, count)
+    if (!quiz.length) throw new Error('Yeni soru üretilemedi')
+    return { quiz }
+  }
+
+  const examples = rows
+    .map((row) => ({
+      ...normalizeExample(row as Partial<ExampleItem>),
+      difficulty: input.difficulty,
+    }))
+    .filter((ex) => ex.problem.length >= 4)
+    .slice(0, count)
+  if (!examples.length) throw new Error('Yeni örnek üretilemedi')
+  return { examples }
 }

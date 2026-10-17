@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { practiceDifficultyLabel } from '@/lib/api'
 import { quizTypeLabel } from '@/lib/contributions'
 import type { QuizItem } from '@/types/database'
 
@@ -20,6 +21,16 @@ export default function QuizPlayer({
   const [answers, setAnswers] = useState<Record<number, number | string>>({})
   const [submitted, setSubmitted] = useState(false)
   const [shareNote, setShareNote] = useState<string | null>(null)
+  const prevLenRef = useRef(quiz.length)
+
+  // Append-only growth: keep old answers, reopen so new items can be answered.
+  useEffect(() => {
+    if (quiz.length > prevLenRef.current) {
+      setSubmitted(false)
+      setShareNote(null)
+    }
+    prevLenRef.current = quiz.length
+  }, [quiz.length])
 
   const score = useMemo(() => {
     if (!submitted) return null
@@ -41,7 +52,11 @@ export default function QuizPlayer({
   }, [answers, quiz, submitted])
 
   if (!quiz.length) {
-    return <p className="muted">Henüz quiz yok.</p>
+    return (
+      <p className="muted text-sm">
+        Henüz soru yok. Aşağıdan zorluk ve adet seçip yeni soru ekleyebilirsin.
+      </p>
+    )
   }
 
   async function shareScore() {
@@ -70,67 +85,73 @@ export default function QuizPlayer({
           Cevapları seç, sonra kontrol et — skorun hemen görünür.
         </p>
       )}
-      {quiz.map((q, i) => (
-        <div key={i} className="space-y-2">
-          <p className="muted text-[11px] font-semibold tracking-wide uppercase">
-            {quizTypeLabel(q.type)}
-          </p>
-          <p className="font-display font-semibold">
-            {i + 1}. {q.question}
-          </p>
-          {q.type === 'short' ? (
-            <input
-              className="field text-sm"
-              disabled={submitted}
-              placeholder="Cevabını yaz…"
-              value={String(answers[i] ?? '')}
-              onChange={(e) =>
-                setAnswers((a) => ({ ...a, [i]: e.target.value }))
-              }
-            />
-          ) : (
-            <div className="space-y-1.5">
-              {(q.options ?? []).map((opt, oi) => {
-                const selected = answers[i] === oi
-                let border = 'var(--line)'
-                let bg = '#fff'
-                if (submitted) {
-                  if (oi === q.correct_index) {
-                    border = 'rgba(11, 90, 84, 0.45)'
-                    bg = 'var(--accent-soft)'
-                  } else if (selected) {
-                    border = 'rgba(163, 61, 61, 0.4)'
-                    bg = 'var(--danger-soft)'
-                  }
-                } else if (selected) {
-                  border = 'var(--accent-deep)'
-                  bg = 'var(--highlight)'
-                }
-                return (
-                  <button
-                    key={oi}
-                    type="button"
-                    disabled={submitted}
-                    onClick={() => setAnswers((a) => ({ ...a, [i]: oi }))}
-                    className="block w-full rounded-xl border px-3 py-2.5 text-left text-sm transition"
-                    style={{ borderColor: border, background: bg }}
-                  >
-                    {opt}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          {submitted && (
-            <p className="muted text-xs">
-              {q.type === 'short' && q.correct_text
-                ? `Beklenen: ${q.correct_text}. `
-                : ''}
-              {q.explanation}
+      {quiz.map((q, i) => {
+        const diff = practiceDifficultyLabel(q.difficulty)
+        return (
+          <div key={`${i}-${q.question.slice(0, 48)}`} className="space-y-2">
+            <p className="muted text-[11px] font-semibold tracking-wide uppercase">
+              {quizTypeLabel(q.type)}
+              {diff ? (
+                <span className="practice-item-diff"> · {diff}</span>
+              ) : null}
             </p>
-          )}
-        </div>
-      ))}
+            <p className="font-display font-semibold">
+              {i + 1}. {q.question}
+            </p>
+            {q.type === 'short' ? (
+              <input
+                className="field text-sm"
+                disabled={submitted}
+                placeholder="Cevabını yaz…"
+                value={String(answers[i] ?? '')}
+                onChange={(e) =>
+                  setAnswers((a) => ({ ...a, [i]: e.target.value }))
+                }
+              />
+            ) : (
+              <div className="space-y-1.5">
+                {(q.options ?? []).map((opt, oi) => {
+                  const selected = answers[i] === oi
+                  let border = 'var(--line)'
+                  let bg = '#fff'
+                  if (submitted) {
+                    if (oi === q.correct_index) {
+                      border = 'rgba(11, 90, 84, 0.45)'
+                      bg = 'var(--accent-soft)'
+                    } else if (selected) {
+                      border = 'rgba(163, 61, 61, 0.4)'
+                      bg = 'var(--danger-soft)'
+                    }
+                  } else if (selected) {
+                    border = 'var(--accent-deep)'
+                    bg = 'var(--highlight)'
+                  }
+                  return (
+                    <button
+                      key={oi}
+                      type="button"
+                      disabled={submitted}
+                      onClick={() => setAnswers((a) => ({ ...a, [i]: oi }))}
+                      className="block w-full rounded-xl border px-3 py-2.5 text-left text-sm transition"
+                      style={{ borderColor: border, background: bg }}
+                    >
+                      {opt}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            {submitted && (
+              <p className="muted text-xs">
+                {q.type === 'short' && q.correct_text
+                  ? `Beklenen: ${q.correct_text}. `
+                  : ''}
+                {q.explanation}
+              </p>
+            )}
+          </div>
+        )
+      })}
 
       {!submitted ? (
         <button

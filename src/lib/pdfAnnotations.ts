@@ -7,7 +7,7 @@ export type PdfAnnotationKind =
   | 'bookmark'
   | 'ai'
 
-export type PdfAiMode = 'ask' | 'summarize' | 'explain'
+export type PdfAiMode = 'ask' | 'summarize' | 'explain' | 'anlatim'
 
 export type PdfAnnotation = {
   id: string
@@ -67,6 +67,7 @@ export function addPdfAnnotation(
   }
   const next = [item, ...loadPdfAnnotations(bookId)]
   savePdfAnnotations(bookId, next)
+  void import('./pdfAnnotationsSync').then((m) => m.pushPdfAnnotation(item))
   return item
 }
 
@@ -90,6 +91,12 @@ export function updatePdfAnnotation(
     a.id === id ? { ...a, ...patch } : a,
   )
   savePdfAnnotations(bookId, next)
+  const updated = next.find((a) => a.id === id)
+  if (updated) {
+    void import('./pdfAnnotationsSync').then((m) =>
+      m.pushPdfAnnotation(updated),
+    )
+  }
   return next
 }
 
@@ -99,6 +106,9 @@ export function removePdfAnnotation(
 ): PdfAnnotation[] {
   const next = loadPdfAnnotations(bookId).filter((a) => a.id !== id)
   savePdfAnnotations(bookId, next)
+  void import('./pdfAnnotationsSync').then((m) =>
+    m.removePdfAnnotationRemote(bookId, id),
+  )
   return next
 }
 
@@ -115,5 +125,6 @@ export function annotationKindLabel(kind: PdfAnnotationKind): string {
 export function annotationAiLabel(mode?: PdfAiMode): string {
   if (mode === 'summarize') return 'Özet'
   if (mode === 'explain') return 'Açıklama'
+  if (mode === 'anlatim') return 'Anlatım’dan'
   return 'AI yanıtı'
 }

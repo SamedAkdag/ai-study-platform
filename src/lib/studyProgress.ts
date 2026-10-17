@@ -36,12 +36,16 @@ export function markChapterOpened(bookId: string, chapterId: string) {
   const store = readStore()
   const book = store[bookId] ?? {}
   const prev = book[chapterId] ?? {}
+  const openedAt = prev.openedAt || new Date().toISOString()
   book[chapterId] = {
     ...prev,
-    openedAt: prev.openedAt || new Date().toISOString(),
+    openedAt,
   }
   store[bookId] = book
   writeStore(store)
+  void import('./chapterProgressSync').then((m) =>
+    m.syncChapterProgressRemote({ bookId, chapterId, openedAt }),
+  )
 }
 
 export function markChapterQuiz(
@@ -53,15 +57,33 @@ export function markChapterQuiz(
   const store = readStore()
   const book = store[bookId] ?? {}
   const prev = book[chapterId] ?? {}
+  const openedAt = prev.openedAt || new Date().toISOString()
+  const quizAt = new Date().toISOString()
   book[chapterId] = {
     ...prev,
-    openedAt: prev.openedAt || new Date().toISOString(),
+    openedAt,
     quizOk: ok,
     quizTotal: total,
-    quizAt: new Date().toISOString(),
+    quizAt,
   }
   store[bookId] = book
   writeStore(store)
+  void import('./quizResults').then((m) =>
+    m.saveQuizResult({ chapterId, score: ok, total }),
+  )
+  void import('./chapterProgressSync').then((m) =>
+    m.syncChapterProgressRemote({
+      bookId,
+      chapterId,
+      openedAt,
+      quizOk: ok,
+      quizTotal: total,
+      quizAt,
+    }),
+  )
+  void import('./srs').then((m) =>
+    m.scheduleFromQuiz(bookId, chapterId, ok, total),
+  )
 }
 
 export function summarizeBookProgress(

@@ -12,8 +12,12 @@ type Props = {
   wide?: boolean
   bookId?: string | null
   showBookTimer?: boolean
-  /** First-visit product tour only (no manual entry point). */
+  /** First-visit product tour only. */
   autoTour?: boolean
+  /** Compact topbar + quiet footer (PDF study chrome). */
+  studyChrome?: boolean
+  /** Top-left study context (book › chapter), sits beside brand. */
+  studyContext?: ReactNode
 }
 
 export default function AppShell({
@@ -22,9 +26,12 @@ export default function AppShell({
   bookId,
   showBookTimer,
   autoTour = false,
+  studyChrome = false,
+  studyContext,
 }: Props) {
   const { user, profile } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [manualTour, setManualTour] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -36,16 +43,33 @@ export default function AppShell({
     return () => document.removeEventListener('mousedown', onDoc)
   }, [menuOpen])
 
+  const shellClass = [
+    'page-shell',
+    wide ? 'max-w-none' : '',
+    studyChrome ? 'page-shell--study-chrome' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
     <div
-      className={`page-shell ${wide ? 'max-w-none' : ''}`}
-      style={wide ? { width: 'min(1280px, calc(100% - 1rem))' } : undefined}
+      className={shellClass}
+      style={
+        wide
+          ? { width: 'min(1680px, calc(100% - 1.25rem))' }
+          : undefined
+      }
     >
       <header className="app-topbar mb-6 flex flex-wrap items-center justify-between gap-3">
-        <Link to="/" className="brand-mark">
-          <span aria-hidden />
-          Studium
-        </Link>
+        <div className="app-topbar__lead">
+          <Link to="/" className="brand-mark" aria-label="Studium ana sayfa">
+            <span aria-hidden />
+            Studium
+          </Link>
+          {studyContext ? (
+            <div className="app-topbar__study">{studyContext}</div>
+          ) : null}
+        </div>
         <nav className="flex flex-wrap items-center gap-0.5">
           <StudyTimerBadge bookId={bookId} showBook={showBookTimer} />
           <NotificationBell />
@@ -81,9 +105,28 @@ export default function AppShell({
                   >
                     Arkadaşlar
                   </Link>
+                  <button
+                    type="button"
+                    className="block w-full rounded-lg px-2.5 py-2 text-left text-xs"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      setManualTour(true)
+                    }}
+                  >
+                    Studium turu
+                  </button>
                 </div>
               )}
             </div>
+          )}
+          {!user && (
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => setManualTour(true)}
+            >
+              Tur
+            </button>
           )}
           <AuthButton />
         </nav>
@@ -101,7 +144,11 @@ export default function AppShell({
         </a>
       </footer>
 
-      {autoTour ? <ProductTour auto /> : null}
+      {manualTour ? (
+        <ProductTour open onClose={() => setManualTour(false)} />
+      ) : autoTour ? (
+        <ProductTour auto />
+      ) : null}
     </div>
   )
 }

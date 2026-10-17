@@ -21,6 +21,8 @@ export type Book = {
 
 export type QuizType = 'mcq' | 'true_false' | 'short'
 
+export type PracticeDifficultyTag = 'easy' | 'medium' | 'hard'
+
 export type QuizItem = {
   type?: QuizType
   question: string
@@ -28,11 +30,15 @@ export type QuizItem = {
   correct_index: number
   correct_text?: string | null
   explanation: string
+  /** Set when generated on-demand in Alıştır */
+  difficulty?: PracticeDifficultyTag
 }
 
 export type ExampleItem = {
   problem: string
   solution_steps: string[]
+  /** Set when generated on-demand in Alıştır */
+  difficulty?: PracticeDifficultyTag
 }
 
 export type PageSource = {
@@ -90,7 +96,60 @@ export type Message = {
   user_id: string | null
   role: 'user' | 'assistant'
   content: string
+  selection_quote?: string | null
   created_at: string
+}
+
+export type QuizResult = {
+  id: string
+  chapter_id: string
+  user_id: string | null
+  score: number
+  total: number
+  answers: Record<string, unknown> | null
+  created_at: string
+}
+
+export type ChapterProgressRow = {
+  id: string
+  user_id: string
+  book_id: string
+  chapter_id: string
+  opened_at: string | null
+  quiz_ok: number | null
+  quiz_total: number | null
+  quiz_at: string | null
+  updated_at: string
+}
+
+export type PdfAnnotationRow = {
+  id: string
+  user_id: string | null
+  book_id: string
+  page: number
+  kind: string
+  quote: string
+  body: string | null
+  cite_style: string | null
+  ai_mode: string | null
+  question: string | null
+  anchor_top_pct: number | null
+  anchor_left_pct: number | null
+  created_at: string
+}
+
+export type SrsItemRow = {
+  id: string
+  user_id: string
+  book_id: string
+  chapter_id: string
+  item_key: string
+  ease: number
+  interval_days: number
+  repetitions: number
+  due_at: string
+  last_grade: number | null
+  updated_at: string
 }
 
 export type InviteRole = 'admin' | 'write' | 'read'
@@ -100,6 +159,10 @@ export type StudyGroup = {
   id: string
   book_id: string
   created_at: string
+  focus_chapter_id?: string | null
+  focus_note?: string | null
+  focus_set_by?: string | null
+  focus_updated_at?: string | null
 }
 
 export type GroupInvite = {
@@ -257,9 +320,74 @@ export type Database = {
           user_id?: string | null
           role: 'user' | 'assistant'
           content: string
+          selection_quote?: string | null
           created_at?: string
         },
         Partial<Message>
+      >
+      quiz_results: TableDef<
+        QuizResult,
+        {
+          id?: string
+          chapter_id: string
+          user_id?: string | null
+          score: number
+          total: number
+          answers?: Record<string, unknown> | null
+          created_at?: string
+        },
+        Partial<QuizResult>
+      >
+      chapter_progress: TableDef<
+        ChapterProgressRow,
+        {
+          id?: string
+          user_id: string
+          book_id: string
+          chapter_id: string
+          opened_at?: string | null
+          quiz_ok?: number | null
+          quiz_total?: number | null
+          quiz_at?: string | null
+          updated_at?: string
+        },
+        Partial<ChapterProgressRow>
+      >
+      pdf_annotations: TableDef<
+        PdfAnnotationRow,
+        {
+          id?: string
+          user_id?: string | null
+          book_id: string
+          page: number
+          kind: string
+          quote?: string
+          body?: string | null
+          cite_style?: string | null
+          ai_mode?: string | null
+          question?: string | null
+          anchor_top_pct?: number | null
+          anchor_left_pct?: number | null
+          created_at?: string
+        },
+        Partial<PdfAnnotationRow>
+      >
+      srs_items: TableDef<
+        SrsItemRow,
+        {
+          id?: string
+          user_id: string
+          book_id: string
+          chapter_id: string
+          item_key?: string
+          ease?: number
+          interval_days?: number
+          repetitions?: number
+          due_at: string
+          last_grade?: number | null
+          updated_at?: string
+        },
+        Partial<SrsItemRow>
       >
       study_groups: TableDef<
         StudyGroup,
@@ -267,6 +395,10 @@ export type Database = {
           id?: string
           book_id: string
           created_at?: string
+          focus_chapter_id?: string | null
+          focus_note?: string | null
+          focus_set_by?: string | null
+          focus_updated_at?: string | null
         },
         Partial<StudyGroup>
       >

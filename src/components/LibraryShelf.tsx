@@ -18,6 +18,16 @@ function sourceLabel(s: LibraryItem['source']) {
   return 'Grup'
 }
 
+function subjectTone(subject?: string | null) {
+  const s = (subject || '').toLowerCase()
+  if (s.includes('math') || s.includes('matematik')) return 'tone-math'
+  if (s.includes('phys') || s.includes('fizik')) return 'tone-phys'
+  if (s.includes('hist') || s.includes('tarih')) return 'tone-hist'
+  if (s.includes('law') || s.includes('hukuk') || s.includes('maliye'))
+    return 'tone-law'
+  return 'tone-default'
+}
+
 export default function LibraryShelf() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
@@ -34,9 +44,12 @@ export default function LibraryShelf() {
 
   if (!items.length) {
     return (
-      <p className="muted text-sm leading-relaxed">
-        Henüz kitap yok. Yukarıdan PDF yükle — veya bir davet linki aç.
-      </p>
+      <div className="library-empty">
+        <p className="font-display text-base font-semibold">Raf boş</p>
+        <p className="muted mt-1 text-sm leading-relaxed">
+          Yukarıdan PDF yükle — veya bir davet linki aç.
+        </p>
+      </div>
     )
   }
 
@@ -47,8 +60,8 @@ export default function LibraryShelf() {
   }
 
   return (
-    <ul>
-      {items.map((item) => {
+    <ul className="library-shelf">
+      {items.map((item, i) => {
         const progressMap = getBookProgress(item.bookId)
         const labels = Object.values(progressMap)
           .map((p) => chapterProgressLabel(p))
@@ -63,11 +76,26 @@ export default function LibraryShelf() {
                 summary.quizzed ? ` · ${summary.quizzed} quiz` : ''
               }`
             : labels[0] || null
+        const pct =
+          summary.opened > 0 && Object.keys(progressMap).length
+            ? Math.min(
+                100,
+                Math.round(
+                  (summary.opened / Math.max(Object.keys(progressMap).length, 1)) *
+                    100,
+                ),
+              )
+            : 0
 
         return (
-          <li key={`${item.source}-${item.bookId}`}>
-            <div className="library-row">
-              <Link to={item.href} className="min-w-0 flex-1 no-underline">
+          <li
+            key={`${item.source}-${item.bookId}`}
+            className="library-shelf__item"
+            style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
+          >
+            <div className={`library-row ${subjectTone(item.subject)}`}>
+              <span className="library-row__spine" aria-hidden />
+              <Link to={item.href} className="library-row__body min-w-0 flex-1 no-underline">
                 <p className="font-display truncate text-[1.05rem] font-semibold">
                   {item.title}
                 </p>
@@ -76,6 +104,11 @@ export default function LibraryShelf() {
                   {item.subject ? ` · ${item.subject}` : ''}
                   {progressHint ? ` · ${progressHint}` : ''}
                 </p>
+                {pct > 0 ? (
+                  <span className="library-row__bar" aria-hidden>
+                    <span style={{ width: `${pct}%` }} />
+                  </span>
+                ) : null}
               </Link>
               <div className="flex shrink-0 items-center gap-2">
                 {item.source !== 'mine' && (

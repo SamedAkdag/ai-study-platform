@@ -14,6 +14,8 @@ import {
   roleLabel,
 } from '@/lib/studyGroup'
 import GroupChatPanel from '@/components/GroupChatPanel'
+import GroupStudyPack from '@/components/GroupStudyPack'
+import BlurredChat from '@/components/study/BlurredChat'
 import ResharePanel from '@/components/ResharePanel'
 import ShareStats from '@/components/ShareStats'
 import { rememberLibraryBook } from '@/lib/library'
@@ -211,6 +213,17 @@ export default function SharedBookPage() {
         </div>
       </header>
 
+      {groupQuery.data && membership ? (
+        <div className="mb-6">
+          <GroupStudyPack
+            group={groupQuery.data}
+            membership={membership}
+            chapters={chapters.map((c) => ({ id: c.id, title: c.title }))}
+            chapterHref={(id) => `/s/${token}/chapters/${id}`}
+          />
+        </div>
+      ) : null}
+
       <ul className="surface-panel space-y-3 p-4 sm:p-6">
         {chapters.map((ch) => {
           const label = chapterProgressLabel(progressMap[ch.id])
@@ -261,15 +274,20 @@ export default function SharedBookPage() {
         )}
       </ul>
 
-      {groupQuery.data && (
-        <div className="mt-6">
+      <div className="mt-6">
+        {groupQuery.data && membership ? (
           <GroupChatPanel
             groupId={groupQuery.data.id}
-            membership={membership ?? null}
+            membership={membership}
             title="Kitap geneli — grup sohbeti"
           />
-        </div>
-      )}
+        ) : (
+          <BlurredChat
+            title="Kitap geneli — grup sohbeti"
+            chapterTitle={bookQuery.data?.title}
+          />
+        )}
+      </div>
     </AppShell>
   )
 }
