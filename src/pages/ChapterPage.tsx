@@ -2,11 +2,14 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ensureChapterArtifact,
   fetchBook,
   fetchChapter,
   fetchChapters,
+  generateChapterBundle,
   generateSingleChapterContent,
   practiceDifficultyLabel,
+  type ChapterArtifactKind,
   type PracticeDifficulty,
 } from '@/lib/api'
 import type { ExampleItem, QuizItem } from '@/types/database'
@@ -34,6 +37,7 @@ import CiteDraftPanel from '@/components/CiteDraftPanel'
 import FlashcardStories from '@/components/FlashcardStories'
 import StudyGuidePanel from '@/components/StudyGuidePanel'
 import AudioOverviewPanel from '@/components/AudioOverviewPanel'
+import AiUsagePanel from '@/components/AiUsagePanel'
 import StudySplitPane from '@/components/StudySplitPane'
 import {
   addPdfAnnotation,
@@ -85,6 +89,7 @@ export default function ChapterPage() {
     'Gerçek dünya örnekleriyle, sade ve anlaşılır anlat',
   )
   const [genError, setGenError] = useState<string | null>(null)
+  const [artifactError, setArtifactError] = useState<string | null>(null)
   const [mobilePane, setMobilePane] = useState<'pdf' | 'notes'>('pdf')
   const [pdfFocusPage, setPdfFocusPage] = useState<number | null>(null)
   const [pdfSel, setPdfSel] = useState<PdfSelectionPayload | null>(null)
@@ -98,6 +103,7 @@ export default function ChapterPage() {
   const [pdfNotes, setPdfNotes] = useState<PdfAnnotation[]>([])
   const [flashOpen, setFlashOpen] = useState(false)
   const [edgeSettingsOpen, setEdgeSettingsOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
   const [contributeOpen, setContributeOpen] = useState(false)
   const [togetherOpen, setTogetherOpen] = useState(false)
   const [readStudio, setReadStudio] = useState<ReadStudioTab | null>(null)
@@ -119,7 +125,10 @@ export default function ChapterPage() {
   }, [bookId])
 
   const omittedQuotes = useMemo(
-    () => pdfNotes.filter((n) => n.kind === 'omit').map((n) => n.quote),
+    () =>
+      pdfNotes
+        .filter((n) => n.kind === 'omit' || n.kind === 'replace')
+        .map((n) => n.quote),
     [pdfNotes],
   )
   const highlightedQuotes = useMemo(
@@ -132,9 +141,52 @@ export default function ChapterPage() {
         .map((n) => n.quote),
     [pdfNotes],
   )
+  const underlinedQuotes = useMemo(
+    () => pdfNotes.filter((n) => n.kind === 'underline').map((n) => n.quote),
+    [pdfNotes],
+  )
+  const struckQuotes = useMemo(
+    () => pdfNotes.filter((n) => n.kind === 'strike').map((n) => n.quote),
+    [pdfNotes],
+  )
+  const redactedQuotes = useMemo(
+    () => pdfNotes.filter((n) => n.kind === 'redact').map((n) => n.quote),
+    [pdfNotes],
+  )
 
   function refreshPdfNotes() {
     if (bookId) setPdfNotes(loadPdfAnnotations(bookId))
+  }
+
+  function saveAiFromPanel(body: string, question?: string) {
+    if (!bookId || !pdfSel || !pdfMode) {
+      throw new Error('Önce PDF’den metin seç')
+    }
+    const text = (body || '').trim()
+    if (!text) throw new Error('Eklenecek AI metni yok')
+    const region = pdfSel.region
+    addPdfAnnotation(bookId, {
+      page: pdfSel.page,
+      kind: 'ai',
+      aiMode: pdfMode,
+      quote: pdfSel.selectedText,
+      question,
+      body: text,
+      textStyle: pdfSel.textStyle,
+      region,
+      anchorTopPct: region
+        ? Math.min(0.98, region.topPct + region.heightPct)
+        : 0.42,
+      anchorLeftPct: region?.leftPct ?? 0.06,
+    })
+    setPdfNotes(loadPdfAnnotations(bookId))
+    setCiteToast('AI seçimin altına eklendi')
+    window.setTimeout(() => setCiteToast(null), 2200)
+    setMode('source')
+    setMobilePane('pdf')
+    setPdfFocusPage(pdfSel.page)
+    setPdfSel(null)
+    setPdfMode(null)
   }
 
   const chapterQuery = useQuery({
@@ -192,6 +244,8 @@ export default function ChapterPage() {
     [chaptersQuery.data, bookId],
   )
 
+  const artifactTried = useRef<Record<string, string>>({})
+
   const generateMutation = useMutation({
     mutationFn: () =>
       generateSingleChapterContent({
@@ -202,8 +256,11 @@ export default function ChapterPage() {
     onSuccess: async () => {
       setGenError(null)
       autoRetryRef.current = 0
+      artifactTried.current = {}
+      setArtifactError(null)
       await queryClient.invalidateQueries({ queryKey: ['chapter', chapterId] })
       await queryClient.invalidateQueries({ queryKey: ['chapters', bookId] })
+      void queryClient.invalidateQueries({ queryKey: ['ai-usage', bookId] })
     },
     onError: (err) => {
       setGenError(friendlyAiError(err))
@@ -212,6 +269,64 @@ export default function ChapterPage() {
         autoRetryRef.current += 1
         window.setTimeout(() => generateMutation.mutate(), 1400)
       }
+    },
+  })
+
+  const artifactMutation = useMutation({
+    mutationFn: (input: { kind: ChapterArtifactKind; force?: boolean }) =>
+      ensureChapterArtifact({
+        chapterId: chapterQuery.data!.id,
+        title: chapterQuery.data!.title,
+        kind: input.kind,
+        force: input.force,
+      }),
+    onSuccess: async (data) => {
+      setArtifactError(null)
+      await queryClient.invalidateQueries({ queryKey: ['chapter', chapterId] })
+      void queryClient.invalidateQueries({ queryKey: ['ai-usage', bookId] })
+      if (data?.weak || data?.quality?.ok === false) {
+        setCiteToast(
+          'Kaynak zayıf veya eksik — harita/alıştır PDF’den kısmi üretildi. Yenile deneyebilirsin.',
+        )
+        window.setTimeout(() => setCiteToast(null), 3200)
+      }
+    },
+    onError: (err) => {
+      setArtifactError(friendlyAiError(err))
+    },
+  })
+
+  /** Notes + all artifacts back-to-back → MiMo prefix cache stays warm. */
+  const bundleMutation = useMutation({
+    mutationFn: () =>
+      generateChapterBundle({
+        id: chapterQuery.data!.id,
+        title: chapterQuery.data!.title,
+        style: stylePref.trim(),
+        forceArtifacts: true,
+      }),
+    onSuccess: async (result) => {
+      setGenError(null)
+      setArtifactError(null)
+      autoRetryRef.current = 0
+      artifactTried.current = {}
+      await queryClient.invalidateQueries({ queryKey: ['chapter', chapterId] })
+      await queryClient.invalidateQueries({ queryKey: ['chapters', bookId] })
+      void queryClient.invalidateQueries({ queryKey: ['ai-usage', bookId] })
+      const failed = result.artifacts.filter((a) => !a.ok)
+      const hitHint = result.artifacts
+        .map((a) => a.usage?.cached_tokens || 0)
+        .reduce((s, n) => s + n, 0)
+      setCiteToast(
+        failed.length
+          ? `Toplu üret: ${result.artifacts.length - failed.length}/${result.artifacts.length} tamam · cache≈${hitHint.toLocaleString('tr-TR')} tok`
+          : `Toplu üret tamam · cache hit≈${hitHint.toLocaleString('tr-TR')} token — Token panelinden bak`,
+      )
+      window.setTimeout(() => setCiteToast(null), 4200)
+      setUsageOpen(true)
+    },
+    onError: (err) => {
+      setGenError(friendlyAiError(err))
     },
   })
 
@@ -237,6 +352,69 @@ export default function ChapterPage() {
     if (ch.mind_map?.branches?.length) return ch.mind_map
     return mindMapFromConcepts(ch.title, ch.key_concepts ?? [])
   }, [ch])
+
+  const artifactBusyKind = artifactMutation.isPending
+    ? artifactMutation.variables?.kind
+    : undefined
+
+  // On-demand: depths / practice / mind map — DB-cached after first click
+  useEffect(() => {
+    artifactTried.current = {}
+    setArtifactError(null)
+  }, [chapterId])
+
+  useEffect(() => {
+    // Skip while Toplu üret owns the artifact sequence (avoids double brief miss).
+    if (
+      !ready ||
+      !ch?.id ||
+      artifactMutation.isPending ||
+      bundleMutation.isPending
+    ) {
+      return
+    }
+
+    const tryKind = (kind: ChapterArtifactKind, needed: boolean) => {
+      if (!needed) return
+      const key = `${ch.id}:${kind}`
+      if (artifactTried.current[key] === '1') return
+      artifactTried.current[key] = '1'
+      artifactMutation.mutate({ kind })
+    }
+
+    if (mode === 'read' && depth === 'brief') {
+      tryKind('brief', !String(ch.explanation_brief || '').trim())
+    }
+    if (mode === 'read' && depth === 'detailed') {
+      tryKind('detailed', !String(ch.explanation_detailed || '').trim())
+    }
+    if (mode === 'practice') {
+      const hasPractice =
+        (ch.quiz?.length ?? 0) +
+          (ch.examples?.length ?? 0) +
+          (ch.flashcards?.length ?? 0) >
+        0
+      tryKind('practice', !hasPractice)
+    }
+    if (mode === 'read' && readStudio === 'map') {
+      tryKind('mind_map', !(ch.mind_map?.branches?.length ?? 0))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    ready,
+    ch?.id,
+    ch?.explanation_brief,
+    ch?.explanation_detailed,
+    ch?.quiz,
+    ch?.examples,
+    ch?.flashcards,
+    ch?.mind_map,
+    mode,
+    depth,
+    readStudio,
+    bundleMutation.isPending,
+    artifactMutation.isPending,
+  ])
 
   useEffect(() => {
     setExtraQuiz([])
@@ -310,6 +488,26 @@ export default function ChapterPage() {
       setMobilePane('notes')
       return
     }
+    if (m === 'copy') {
+      void navigator.clipboard
+        ?.writeText(payload.selectedText)
+        .then(() => {
+          setCiteToast('Kopyalandı')
+          window.setTimeout(() => setCiteToast(null), 1800)
+        })
+        .catch(() => undefined)
+      return
+    }
+    if (m === 'redact') {
+      setCiteToast('Sansürlendi — PDF güncellendi')
+      window.setTimeout(() => setCiteToast(null), 1800)
+      return
+    }
+    if (m === 'replace') {
+      setCiteToast('Metin değiştirildi — PDF güncellendi')
+      window.setTimeout(() => setCiteToast(null), 1800)
+      return
+    }
     if ((m === 'highlight' || m === 'omit') && bookId) {
       addPdfAnnotation(bookId, {
         page: payload.page,
@@ -318,6 +516,39 @@ export default function ChapterPage() {
       })
       refreshPdfNotes()
       setCiteToast(m === 'omit' ? 'Metin gizlendi' : 'Vurgulandı')
+      window.setTimeout(() => setCiteToast(null), 1800)
+      return
+    }
+    if (m === 'underline' && bookId) {
+      addPdfAnnotation(bookId, {
+        page: payload.page,
+        kind: 'underline',
+        quote: payload.selectedText,
+      })
+      refreshPdfNotes()
+      setCiteToast('Altı çizildi')
+      window.setTimeout(() => setCiteToast(null), 1800)
+      return
+    }
+    if (m === 'strike' && bookId) {
+      addPdfAnnotation(bookId, {
+        page: payload.page,
+        kind: 'strike',
+        quote: payload.selectedText,
+      })
+      refreshPdfNotes()
+      setCiteToast('Üstü çizildi')
+      window.setTimeout(() => setCiteToast(null), 1800)
+      return
+    }
+    if (m === 'bookmark' && bookId) {
+      addPdfAnnotation(bookId, {
+        page: payload.page,
+        kind: 'bookmark',
+        quote: payload.selectedText.slice(0, 120),
+      })
+      refreshPdfNotes()
+      setCiteToast('Yer imi eklendi')
       window.setTimeout(() => setCiteToast(null), 1800)
     }
   }
@@ -344,6 +575,7 @@ export default function ChapterPage() {
               setPdfSel(null)
               setPdfMode(null)
             }}
+            onSaveToBook={saveAiFromPanel}
           />
         )}
 
@@ -352,7 +584,32 @@ export default function ChapterPage() {
             <MindMapPanel
               data={mindMap}
               title={ch.title}
-              markdown={markdownForDepth || ch.explanation}
+              markdown={
+                ch.explanation_detailed ||
+                markdownForDepth ||
+                ch.explanation
+              }
+              pageSources={ch.page_sources}
+              pageText={ch.page_text}
+              startPage={ch.start_page}
+              endPage={ch.end_page}
+              refreshingMap={artifactBusyKind === 'mind_map'}
+              onRefreshMap={() => {
+                artifactTried.current[`${ch.id}:mind_map`] = '1'
+                artifactMutation.mutate({ kind: 'mind_map', force: true })
+              }}
+              onOpenInPdf={(page, label) => {
+                setPdfFocusPage(page)
+                setMode('source')
+                setMobilePane('pdf')
+                setReadStudio(null)
+                setCiteToast(
+                  `Haritadan: “${label.slice(0, 40)}${
+                    label.length > 40 ? '…' : ''
+                  }” · s. ${page}`,
+                )
+                window.setTimeout(() => setCiteToast(null), 2200)
+              }}
             />
           </section>
         ) : null}
@@ -454,6 +711,11 @@ export default function ChapterPage() {
   const practiceBody =
     ready && ch ? (
       <div className="chapter-practice">
+        {artifactBusyKind === 'practice' ? (
+          <div className="alert-info mb-4">
+            Alıştır ilk kez hazırlanıyor… Sonraki açılışlarda anında gelir.
+          </div>
+        ) : null}
         {chapterDue && bookId && chapterId ? (
           <div className="srs-due-banner surface-panel p-4">
             <p className="section-label mb-1">Bugünkü tekrar</p>
@@ -645,6 +907,7 @@ export default function ChapterPage() {
                 kind: 'note',
                 quote: draftNote.selectedText,
                 body: noteBody.trim() || undefined,
+                textStyle: draftNote.textStyle,
               })
               setDraftNote(null)
               setNoteBody('')
@@ -726,6 +989,7 @@ export default function ChapterPage() {
                     quote: draftCite.selectedText,
                     body: formatted,
                     citeStyle: style,
+                    textStyle: draftCite.textStyle,
                   })
                   setDraftCite(null)
                   refreshPdfNotes()
@@ -751,6 +1015,7 @@ export default function ChapterPage() {
                   setPdfSel(null)
                   setPdfMode(null)
                 }}
+                onSaveToBook={saveAiFromPanel}
               />
             )}
           </div>
@@ -852,6 +1117,7 @@ export default function ChapterPage() {
             onClick: () => {
               setContributeOpen(false)
               setEdgeSettingsOpen(false)
+              setUsageOpen(false)
               setMode('practice')
               setPracticePanel('flash')
               setFlashOpen(true)
@@ -900,6 +1166,7 @@ export default function ChapterPage() {
             hidden: !(membership && canWrite && groupQuery.data && ch),
             onClick: () => {
               setEdgeSettingsOpen(false)
+              setUsageOpen(false)
               setContributeOpen((v) => !v)
             },
           },
@@ -911,6 +1178,8 @@ export default function ChapterPage() {
             hidden: !(membership && groupQuery.data && ch),
             onClick: () => {
               setContributeOpen(false)
+              setUsageOpen(false)
+              setEdgeSettingsOpen(false)
               setTogetherOpen((v) => {
                 const next = !v
                 if (next) {
@@ -935,20 +1204,41 @@ export default function ChapterPage() {
             hidden: !ready,
             onClick: () => {
               setContributeOpen(false)
+              setUsageOpen(false)
               setEdgeSettingsOpen((v) => !v)
+            },
+          },
+          {
+            id: 'usage',
+            label: 'Token',
+            title: 'AI input / output token kullanımı',
+            active: usageOpen,
+            hidden: !bookId,
+            onClick: () => {
+              setContributeOpen(false)
+              setEdgeSettingsOpen(false)
+              setUsageOpen((v) => !v)
             },
           },
         ]}
         panelOpen={
           (contributeOpen &&
             !!(membership && canWrite && groupQuery.data && ch)) ||
-          (edgeSettingsOpen && ready)
+          (edgeSettingsOpen && ready) ||
+          (usageOpen && !!bookId)
         }
-        panelTitle={contributeOpen ? 'İçerik ekle' : 'Ayarlar'}
+        panelTitle={
+          contributeOpen
+            ? 'İçerik ekle'
+            : usageOpen
+              ? 'Token kullanımı'
+              : 'Ayarlar'
+        }
         panelWide={contributeOpen}
         onClosePanel={() => {
           setContributeOpen(false)
           setEdgeSettingsOpen(false)
+          setUsageOpen(false)
         }}
         panel={
           contributeOpen && membership && canWrite && groupQuery.data && ch ? (
@@ -964,8 +1254,10 @@ export default function ChapterPage() {
               ).slice(0, 1200)}
               onApplied={refreshChapter}
             />
+          ) : usageOpen && bookId ? (
+            <AiUsagePanel bookId={bookId} chapterId={chapterId} />
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-4">
               <label className="block text-xs">
                 <span className="muted mb-1 block font-medium">
                   Anlatım stili
@@ -988,101 +1280,126 @@ export default function ChapterPage() {
               >
                 İçeriği yeniden üret
               </button>
+              <button
+                type="button"
+                className="btn-primary w-full text-xs"
+                disabled={bundleMutation.isPending || generateMutation.isPending}
+                onClick={() => {
+                  autoRetryRef.current = 0
+                  setEdgeSettingsOpen(false)
+                  bundleMutation.mutate()
+                }}
+              >
+                {bundleMutation.isPending
+                  ? 'Toplu üretiliyor…'
+                  : 'Toplu üret (cache)'}
+              </button>
+              <p className="muted text-[10px] leading-snug">
+                Not+detay aynı sunucuda (cache), sonra özet/alıştır/harita.
+                Edge limitine takılmaz. Token panelinden bak.
+              </p>
             </div>
           )
         }
       />
 
-      <header className="chapter-hero chapter-hero--study">
-        <div className="chapter-toolbar">
+      <header
+        className={`chapter-hero chapter-hero--study${
+          hasPdf ? ' chapter-hero--workspace' : ''
+        }`}
+      >
+        <div className="study-workspace-bar">
+          <div className="study-workspace-bar__lead">
+            <h1 className="study-workspace-bar__title">{ch?.title || '…'}</h1>
+            {ch?.summary && hasPdf ? (
+              <details className="chapter-summary-disclosure">
+                <summary>Özet</summary>
+                <p className="muted mt-1.5 max-w-xl text-sm leading-relaxed">
+                  {ch.summary}
+                </p>
+              </details>
+            ) : null}
+          </div>
+
           {(ready || hasPdf) && (
-            <div
-              className="mode-segment mode-segment--primary"
-              role="tablist"
-              aria-label="Çalışma modu"
-            >
-              {modes
-                .filter((m) => (m.id === 'source' ? hasPdf : ready))
-                .map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={mode === m.id}
-                    className={`chip ${mode === m.id ? 'chip-active' : 'chip-idle'}`}
-                    onClick={() => {
-                      setMode(m.id)
-                      if (m.id !== 'read') setReadStudio(null)
-                      if (m.id === 'source') setMobilePane('pdf')
-                      if (m.id === 'read' || m.id === 'practice') {
-                        setMobilePane('notes')
-                      }
-                      if (m.id === 'practice') {
-                        setPracticePanel('quiz')
-                        setFlashOpen(false)
-                      }
-                    }}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-            </div>
-          )}
+            <div className="study-workspace-bar__controls">
+              <div
+                className="mode-segment mode-segment--primary"
+                role="tablist"
+                aria-label="Çalışma modu"
+              >
+                {modes
+                  .filter((m) => (m.id === 'source' ? hasPdf : ready))
+                  .map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={mode === m.id}
+                      className={`chip ${
+                        mode === m.id ? 'chip-active' : 'chip-idle'
+                      }`}
+                      onClick={() => {
+                        setMode(m.id)
+                        if (m.id !== 'read') setReadStudio(null)
+                        if (m.id === 'source') setMobilePane('pdf')
+                        if (m.id === 'read' || m.id === 'practice') {
+                          setMobilePane('notes')
+                        }
+                        if (m.id === 'practice') {
+                          setPracticePanel('quiz')
+                          setFlashOpen(false)
+                        }
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+              </div>
 
-          {mode === 'read' && ready && (
-            <div
-              className="mode-segment mode-segment--secondary"
-              role="tablist"
-              aria-label="Anlatım derinliği"
-            >
-              {depths.map((d) => (
-                <button
-                  key={d.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={depth === d.id}
-                  className={`chip ${depth === d.id ? 'chip-active' : 'chip-idle'}`}
-                  onClick={() => setDepth(d.id)}
+              {mode === 'read' && ready ? (
+                <div
+                  className="mode-segment mode-segment--secondary"
+                  role="tablist"
+                  aria-label="Anlatım derinliği"
                 >
-                  {d.label}
-                </button>
-              ))}
+                  {depths.map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={depth === d.id}
+                      className={`chip ${
+                        depth === d.id ? 'chip-active' : 'chip-idle'
+                      }`}
+                      onClick={() => setDepth(d.id)}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           )}
         </div>
 
-        <div
-          className={`chapter-hero__title ${
-            hasPdf ? 'chapter-hero__title--compact' : ''
-          }`}
-        >
-          <h1 className="font-display font-semibold tracking-tight">
-            {ch?.title || '…'}
-          </h1>
-          {ch?.summary && hasPdf && (
-            <details className="chapter-summary-disclosure mt-2">
-              <summary className="muted cursor-pointer text-xs font-semibold">
-                Özet
-              </summary>
-              <p className="muted mt-2 max-w-2xl text-sm leading-relaxed">
-                {ch.summary}
-              </p>
-            </details>
-          )}
-          {ch?.summary && !hasPdf && (
-            <p className="muted mt-2 max-w-2xl text-sm leading-relaxed line-clamp-2">
-              {ch.summary}
-            </p>
-          )}
-        </div>
+        {!hasPdf && ch?.summary ? (
+          <p className="muted mt-2 max-w-2xl text-sm leading-relaxed line-clamp-2">
+            {ch.summary}
+          </p>
+        ) : null}
       </header>
 
-      {needsContent && ch?.status !== 'generating' && !generateMutation.isPending && (
+      {needsContent &&
+        ch?.status !== 'generating' &&
+        !generateMutation.isPending &&
+        !bundleMutation.isPending && (
         <div className="surface-panel mb-5 space-y-4 p-5 sm:p-7">
           <div className="text-center">
             <p className="font-display text-xl font-semibold">İçerik üret</p>
             <p className="muted mx-auto mt-1.5 max-w-md text-sm">
-              Anlatım, Flash kartlar, örnek ve quiz oluştur.
+              Önce standart anlatım hazırlanır. Özet, detay, alıştır ve harita
+              tıklayınca üretilir (bir kez, sonra cache).
               {hasPdf ? ' Bu arada PDF’de metin seçip AI’ya sorabilirsin.' : ''}
             </p>
           </div>
@@ -1098,13 +1415,27 @@ export default function ChapterPage() {
               className="field mt-2"
             />
           </details>
-          <div className="text-center">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             <button
               type="button"
               onClick={() => generateMutation.mutate()}
               className="btn-primary"
+              disabled={
+                generateMutation.isPending || bundleMutation.isPending
+              }
             >
               Üret
+            </button>
+            <button
+              type="button"
+              onClick={() => bundleMutation.mutate()}
+              className="btn-ghost"
+              disabled={
+                generateMutation.isPending || bundleMutation.isPending
+              }
+              title="Not + özet + detay + alıştır + harita — MiMo cache"
+            >
+              {bundleMutation.isPending ? 'Toplu…' : 'Toplu üret'}
             </button>
           </div>
           {genError && (
@@ -1137,10 +1468,53 @@ export default function ChapterPage() {
         </div>
       )}
 
-      {(ch?.status === 'generating' || generateMutation.isPending) && (
+      {(ch?.status === 'generating' ||
+        generateMutation.isPending ||
+        bundleMutation.isPending) && (
         <div className="alert-info mb-4">
-          İçerik üretiliyor… Her sayfa kapsanmaya çalışılıyor (özet + genel +
-          detay).
+          Standart anlatım üretiliyor… Sayfalar taranıyor (özet / detay /
+          alıştır tıklayınca gelir).
+        </div>
+      )}
+
+      {artifactBusyKind && (
+        <div className="alert-info mb-4">
+          {artifactBusyKind === 'brief'
+            ? 'Kısa özet üretiliyor…'
+            : artifactBusyKind === 'detailed'
+              ? 'Detaylı anlatım üretiliyor…'
+              : artifactBusyKind === 'practice'
+                ? 'Alıştır materyali üretiliyor (quiz, örnek, flash)…'
+                : 'Zihin haritası üretiliyor…'}
+        </div>
+      )}
+
+      {artifactError && (
+        <div className="alert-error mb-4 flex flex-wrap items-center gap-2">
+          <span>{artifactError}</span>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            onClick={() => {
+              setArtifactError(null)
+              if (artifactBusyKind) return
+              const kind: ChapterArtifactKind | null =
+                mode === 'practice'
+                  ? 'practice'
+                  : readStudio === 'map'
+                    ? 'mind_map'
+                    : depth === 'brief'
+                      ? 'brief'
+                      : depth === 'detailed'
+                        ? 'detailed'
+                        : null
+              if (!kind || !ch) return
+              artifactTried.current[`${ch.id}:${kind}`] = ''
+              artifactMutation.mutate({ kind })
+            }}
+          >
+            Tekrar dene
+          </button>
         </div>
       )}
 
@@ -1164,6 +1538,9 @@ export default function ChapterPage() {
               onPageChange={(p) => setPdfFocusPage(p)}
               omittedQuotes={omittedQuotes}
               highlightedQuotes={highlightedQuotes}
+              underlinedQuotes={underlinedQuotes}
+              struckQuotes={struckQuotes}
+              redactedQuotes={redactedQuotes}
               annotations={pdfNotes}
               bookId={bookId}
               chapterId={ch?.id || chapterId}

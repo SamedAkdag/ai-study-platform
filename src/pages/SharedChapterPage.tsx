@@ -1,11 +1,13 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ensureChapterArtifact,
   fetchPublicBook,
   fetchPublicChapter,
   fetchPublicChapters,
   practiceDifficultyLabel,
+  type ChapterArtifactKind,
   type PracticeDifficulty,
 } from '@/lib/api'
 import type { ExampleItem, QuizItem } from '@/types/database'
@@ -99,6 +101,7 @@ export default function SharedChapterPage() {
   const ch = chapterQuery.data
   const membership = membershipQuery.data
   const canWrite = roleAtLeast(membership?.role, 'write')
+  const ready = ch?.status === 'ready' && !!ch.explanation
 
   function refreshChapter() {
     void queryClient.invalidateQueries({
@@ -108,6 +111,62 @@ export default function SharedChapterPage() {
       queryKey: ['public-chapters', bookQuery.data?.id],
     })
   }
+
+  const artifactTried = useRef<Record<string, string>>({})
+  const artifactMutation = useMutation({
+    mutationFn: (kind: ChapterArtifactKind) =>
+      ensureChapterArtifact({
+        chapterId: ch!.id,
+        title: ch!.title,
+        kind,
+      }),
+    onSuccess: () => refreshChapter(),
+  })
+
+  useEffect(() => {
+    artifactTried.current = {}
+  }, [chapterId])
+
+  useEffect(() => {
+    if (!ready || !ch?.id || artifactMutation.isPending) return
+    const tryKind = (kind: ChapterArtifactKind, needed: boolean) => {
+      if (!needed) return
+      const key = `${ch.id}:${kind}`
+      if (artifactTried.current[key] === '1') return
+      artifactTried.current[key] = '1'
+      artifactMutation.mutate(kind)
+    }
+    if (mode === 'read' && depth === 'brief') {
+      tryKind('brief', !String(ch.explanation_brief || '').trim())
+    }
+    if (mode === 'read' && depth === 'detailed') {
+      tryKind('detailed', !String(ch.explanation_detailed || '').trim())
+    }
+    if (mode === 'practice') {
+      const hasPractice =
+        (ch.quiz?.length ?? 0) +
+          (ch.examples?.length ?? 0) +
+          (ch.flashcards?.length ?? 0) >
+        0
+      tryKind('practice', !hasPractice)
+    }
+    if (mode === 'read' && readStudio === 'map') {
+      tryKind('mind_map', !(ch.mind_map?.branches?.length ?? 0))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    ready,
+    ch?.id,
+    ch?.explanation_brief,
+    ch?.explanation_detailed,
+    ch?.quiz,
+    ch?.examples,
+    ch?.flashcards,
+    ch?.mind_map,
+    mode,
+    depth,
+    readStudio,
+  ])
 
   const markdown = useMemo(() => {
     if (!ch) return ''

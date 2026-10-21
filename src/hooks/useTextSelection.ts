@@ -7,6 +7,11 @@ import {
   type PointerEvent,
   type RefObject,
 } from 'react'
+import {
+  sampleTextStyleFromElements,
+  sampleTextStyleFromRange,
+  type PdfTextStyle,
+} from '@/lib/pdfTextStyle'
 
 export type TextSelectionContext = {
   selectedText: string
@@ -14,6 +19,8 @@ export type TextSelectionContext = {
   followingContext: string
   /** Viewport rect of the selection (for absolute toolbars). */
   rect: DOMRect
+  /** Typography from selected PDF spans (or prose range). */
+  textStyle?: PdfTextStyle
 }
 
 const PDF_SEL_CLASS = 'pdf-sel-hit'
@@ -196,6 +203,10 @@ export function readTextSelection(
       precedingContext: ctx.precedingContext,
       followingContext: ctx.followingContext,
       rect: geo.rect,
+      textStyle:
+        sampleTextStyleFromElements(geo.spans) ||
+        sampleTextStyleFromRange(range) ||
+        undefined,
     }
   }
 
@@ -208,6 +219,7 @@ export function readTextSelection(
     precedingContext: ctx.precedingContext,
     followingContext: ctx.followingContext,
     rect: selectionRect(range),
+    textStyle: sampleTextStyleFromRange(range) || undefined,
   }
 }
 
@@ -291,6 +303,10 @@ export function useTextSelection(
         precedingContext: around.precedingContext,
         followingContext: around.followingContext,
         rect: geo.rect,
+        textStyle:
+          sampleTextStyleFromElements(geo.spans) ||
+          sampleTextStyleFromRange(range) ||
+          undefined,
       })
       // Drop native multi-span paint; our marks show the true selection
       sel.removeAllRanges()

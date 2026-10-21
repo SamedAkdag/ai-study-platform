@@ -1,7 +1,15 @@
 // Shared LLM: MiMo (Token Harbor) → Groq → Gemini
 // Secrets: TOKEN_HARBOR_API_KEY, GROQ_API_KEY?, GEMINI_API_KEY?
 
-import { callMimo, getMimoConfig } from './mimo.ts'
+import {
+  callMimo,
+  estimateTokenUsage,
+  extractTokenUsage,
+  getMimoConfig,
+  type TokenUsage,
+} from './mimo.ts'
+
+export type { TokenUsage }
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const GROQ_MODEL = 'qwen/qwen3.8-27b'
@@ -21,6 +29,31 @@ export type ChatMessage = {
 export type LlmResult = {
   text: string
   provider: 'mimo' | 'groq' | 'gemini'
+  usage: TokenUsage
+}
+
+export function emptyUsage(): TokenUsage {
+  return {
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    cached_tokens: 0,
+    estimated: false,
+  }
+}
+
+export function addTokenUsage(
+  a: TokenUsage,
+  b: TokenUsage | undefined | null,
+): TokenUsage {
+  if (!b) return a
+  return {
+    prompt_tokens: a.prompt_tokens + b.prompt_tokens,
+    completion_tokens: a.completion_tokens + b.completion_tokens,
+    total_tokens: a.total_tokens + b.total_tokens,
+    cached_tokens: a.cached_tokens + (b.cached_tokens || 0),
+    estimated: a.estimated || b.estimated,
+  }
 }
 
 function sleep(ms: number) {
@@ -47,7 +80,7 @@ async function callGroq(
   apiKey: string,
   messages: ChatMessage[],
   opts: { json?: boolean; temperature?: number; maxTokens?: number },
-): Promise<string> {
+): Promise<{ text: string; usage: TokenUsage }> {
   let lastErr = 'Groq failed'
 
   for (let attempt = 0; attempt <= GROQ_RETRIES; attempt += 1) {
@@ -72,7 +105,8 @@ async function callGroq(
       const payload = JSON.parse(body)
       const content = payload?.choices?.[0]?.message?.content
       if (typeof content !== 'string') throw new Error('Empty Groq response')
-      return content
+      const fallback = estimateTokenUsage(messages, content)
+      return { text: content, usage: extractTokenUsage(payload, fallback) }
     }
 
     lastErr = `Groq error ${res.status}: ${body}`
@@ -96,7 +130,7 @@ async function callGeminiOnce(
   model: string,
   messages: ChatMessage[],
   opts: { json?: boolean; temperature?: number; maxTokens?: number },
-): Promise<string> {
+): Promise<{ text: string; usage: TokenUsage }> {
   const system = messages
     .filter((m) => m.role === 'system')
     .map((m) => m.content)
@@ -164,14 +198,45 @@ async function callGeminiOnce(
   if (typeof text !== 'string' || !text.trim()) {
     throw new Error(`Empty Gemini response (${model})`)
   }
-  return text
+
+  const meta = payload?.usageMetadata as
+    | {
+        promptTokenCount?: number
+        candidatesTokenCount?: number
+        totalTokenCount?: number
+      }
+    | undefined
+  const fallback = estimateTokenUsage(messages, text)
+  const usage: TokenUsage =
+    meta &&
+    (meta.promptTokenCount != null || meta.candidatesTokenCount != null)
+      ? {
+          prompt_tokens: Math.max(0, Math.round(meta.promptTokenCount ?? 0)),
+          completion_tokens: Math.max(
+            0,
+            Math.round(meta.candidatesTokenCount ?? 0),
+          ),
+          total_tokens: Math.max(
+            0,
+            Math.round(
+              meta.totalTokenCount ??
+                (meta.promptTokenCount ?? 0) +
+                  (meta.candidatesTokenCount ?? 0),
+            ),
+          ),
+          cached_tokens: 0,
+          estimated: false,
+        }
+      : fallback
+
+  return { text, usage }
 }
 
 async function callGemini(
   apiKey: string,
   messages: ChatMessage[],
   opts: { json?: boolean; temperature?: number; maxTokens?: number },
-): Promise<string> {
+): Promise<{ text: string; usage: TokenUsage }> {
   let lastErr: Error = new Error('Gemini failed')
 
   for (const model of GEMINI_MODELS) {
@@ -246,8 +311,8 @@ export async function llmComplete(opts: {
   }
 
   try {
-    const text = await callMimo(opts.messages, opts)
-    return { text, provider: 'mimo' }
+    const { text, usage } = await callMimo(opts.messages, opts)
+    return { text, provider: 'mimo', usage }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
 
@@ -264,8 +329,8 @@ export async function llmComplete(opts: {
 
   if (groqKey) {
     try {
-      const text = await callGroq(groqKey, opts.messages, opts)
-      return { text, provider: 'groq' }
+      const { text, usage } = await callGroq(groqKey, opts.messages, opts)
+      return { text, provider: 'groq', usage }
     } catch (err) {
       if (!shouldFallback(err) || !geminiKey) throw err
       console.warn('Groq unavailable, falling back to Gemini')
@@ -275,8 +340,8 @@ export async function llmComplete(opts: {
   if (!geminiKey) {
     throw new Error('MiMo failed and no GROQ_API_KEY / GEMINI_API_KEY for fallback')
   }
-  const text = await callGemini(geminiKey, opts.messages, opts)
-  return { text, provider: 'gemini' }
+  const { text, usage } = await callGemini(geminiKey, opts.messages, opts)
+  return { text, provider: 'gemini', usage }
 }
 
 export function stripMarkdownJson(raw: string): string {
@@ -457,30 +522,36 @@ export async function llmCompleteJson(opts: {
   retries?: number
   /** Skip the second LLM "fix JSON" call (saves CPU/mem on Edge). */
   skipRepairCall?: boolean
-}): Promise<{ value: Record<string, unknown>; provider: LlmResult['provider'] }> {
+}): Promise<{
+  value: Record<string, unknown>
+  provider: LlmResult['provider']
+  usage: TokenUsage
+}> {
   const retries = opts.retries ?? 2
   let lastErr: Error = new Error('AI response was not valid JSON')
+  let usageAcc = emptyUsage()
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const useJson = attempt < retries
     try {
-      const { text, provider } = await llmComplete({
+      const { text, provider, usage } = await llmComplete({
         messages: opts.messages,
         json: useJson,
         temperature: attempt === 0 ? (opts.temperature ?? 0.3) : 0.15,
         maxTokens: opts.maxTokens,
       })
+      usageAcc = addTokenUsage(usageAcc, usage)
       try {
         const value = safeParseJson(text) as Record<string, unknown>
         if (value && typeof value === 'object' && !Array.isArray(value)) {
-          return { value, provider }
+          return { value, provider, usage: usageAcc }
         }
         throw new Error('JSON root was not an object')
       } catch (parseErr) {
         lastErr = parseErr instanceof Error ? parseErr : new Error(String(parseErr))
         if (opts.skipRepairCall) throw lastErr
         // One repair call before next full regenerate
-        const { text: repaired } = await llmComplete({
+        const repairedRes = await llmComplete({
           messages: [
             {
               role: 'system',
@@ -496,9 +567,10 @@ export async function llmCompleteJson(opts: {
           temperature: 0,
           maxTokens: Math.min(opts.maxTokens ?? 3000, 2800),
         })
-        const value = safeParseJson(repaired) as Record<string, unknown>
+        usageAcc = addTokenUsage(usageAcc, repairedRes.usage)
+        const value = safeParseJson(repairedRes.text) as Record<string, unknown>
         if (value && typeof value === 'object' && !Array.isArray(value)) {
-          return { value, provider }
+          return { value, provider, usage: usageAcc }
         }
         throw new Error('Repaired JSON root was not an object')
       }

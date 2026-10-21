@@ -11,6 +11,8 @@ import { loadCachedPdf } from '@/lib/pdfCache'
 export function useBookPdfUrl(
   bookId: string | undefined,
   fileUrl: string | null | undefined,
+  /** Bump after local PDF replace (organize / re-upload). */
+  refreshKey = 0,
 ) {
   const [url, setUrl] = useState<string | null>(() =>
     bookId ? getPdfObjectUrl(bookId) : null,
@@ -26,9 +28,20 @@ export function useBookPdfUrl(
       return
     }
 
+    // After organize save, session blob is authoritative
+    if (refreshKey > 0) {
+      const mem = recallPdf(bookId)
+      if (mem) {
+        setUrl(getPdfObjectUrl(bookId, mem))
+        setLoading(false)
+        setError(null)
+        return
+      }
+    }
+
     // Zaten oturumda varsa anında
     const mem = getPdfObjectUrl(bookId)
-    if (mem) {
+    if (mem && refreshKey === 0) {
       setUrl(mem)
       setLoading(false)
       setError(null)
@@ -84,7 +97,7 @@ export function useBookPdfUrl(
     return () => {
       cancelled = true
     }
-  }, [bookId, fileUrl])
+  }, [bookId, fileUrl, refreshKey])
 
   return { url, loading, error }
 }

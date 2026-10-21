@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import { currentUserId } from './authSession'
 import type { PdfAnnotation } from './pdfAnnotations'
 import { loadPdfAnnotations, savePdfAnnotations } from './pdfAnnotations'
+import { isPdfTextStyle, type PdfTextStyle } from './pdfTextStyle'
 
 function rowToLocal(
   row: {
@@ -16,9 +17,13 @@ function rowToLocal(
     question: string | null
     anchor_top_pct: number | null
     anchor_left_pct: number | null
+    text_style?: unknown
     created_at: string
   },
 ): PdfAnnotation {
+  const textStyle = isPdfTextStyle(row.text_style)
+    ? (row.text_style as PdfTextStyle)
+    : undefined
   return {
     id: row.id,
     bookId: row.book_id,
@@ -31,6 +36,7 @@ function rowToLocal(
     question: row.question || undefined,
     anchorTopPct: row.anchor_top_pct ?? undefined,
     anchorLeftPct: row.anchor_left_pct ?? undefined,
+    textStyle,
     createdAt: row.created_at,
   }
 }
@@ -53,6 +59,7 @@ export async function pushPdfAnnotation(item: PdfAnnotation): Promise<void> {
       question: item.question ?? null,
       anchor_top_pct: item.anchorTopPct ?? null,
       anchor_left_pct: item.anchorLeftPct ?? null,
+      text_style: item.textStyle ?? null,
       created_at: item.createdAt,
     })
     if (error) console.warn('pdf_annotations upsert failed', error)
@@ -116,7 +123,12 @@ export async function pullPdfAnnotations(
       const remote = rowToLocal(row)
       const prev = byId.get(remote.id)
       if (!prev || remote.createdAt >= prev.createdAt) {
-        byId.set(remote.id, remote)
+        // Prefer local textStyle if remote lacks it (pre-migration rows)
+        if (!remote.textStyle && prev?.textStyle) {
+          byId.set(remote.id, { ...remote, textStyle: prev.textStyle })
+        } else {
+          byId.set(remote.id, remote)
+        }
       }
     }
     const merged = [...byId.values()].sort((a, b) =>

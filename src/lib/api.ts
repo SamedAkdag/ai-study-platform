@@ -4,6 +4,7 @@ import type { MergedChapter, WindowSegmentResult } from './mergeChapters'
 import { mergeWindowChapters } from './mergeChapters'
 import { sanitizeForPostgres } from './sanitize'
 import type {
+  AiUsageEvent,
   ExampleItem,
   FlashcardItem,
   MindMapData,
@@ -247,52 +248,99 @@ export async function saveChapters(
   return data ?? []
 }
 
-/** Generate study materials for ONE chapter (chunked edge invokes — CPU-safe). */
+/** Generate standard notes for ONE chapter (single LLM call; full unit SOURCE). */
 export async function generateSingleChapterContent(input: {
   id: string
   title: string
   style?: string
 }) {
-  let chunkIndex = 0
-  let guard = 0
-  const maxLoops = 8
+  const { data, error } = await supabase.functions.invoke(
+    'generate-chapter-content',
+    {
+      body: {
+        chapter_id: input.id,
+        title: input.title,
+        style: input.style || undefined,
+        chunk_index: 0,
+      },
+    },
+  )
 
-  while (guard < maxLoops) {
-    guard += 1
-    const { data, error } = await supabase.functions.invoke(
-      'generate-chapter-content',
-      {
+  if (error) {
+    const detail = await extractFunctionsError(error, data)
+    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
+    throw new Error(detail)
+  }
+
+  if (data?.error) {
+    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
+    throw new Error(String(data.error))
+  }
+
+  if (!data?.done && data?.next_chunk != null) {
+    // Legacy multi-chunk edge still deployed — finish remaining chunks.
+    let chunkIndex = Number(data.next_chunk)
+    let guard = 0
+    while (guard < 8 && Number.isFinite(chunkIndex)) {
+      guard += 1
+      const cont = await supabase.functions.invoke('generate-chapter-content', {
         body: {
           chapter_id: input.id,
           title: input.title,
           style: input.style || undefined,
           chunk_index: chunkIndex,
         },
-      },
-    )
-
-    if (error) {
-      const detail = await extractFunctionsError(error, data)
-      await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
-      throw new Error(detail)
+      })
+      if (cont.error) {
+        throw new Error(await extractFunctionsError(cont.error, cont.data))
+      }
+      if (cont.data?.error) throw new Error(String(cont.data.error))
+      if (cont.data?.done) return cont.data
+      const next = Number(cont.data?.next_chunk)
+      if (!Number.isFinite(next) || next <= chunkIndex) break
+      chunkIndex = next
     }
-
-    if (data?.error) {
-      await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
-      throw new Error(String(data.error))
-    }
-
-    if (data?.done) return data
-
-    const next = Number(data?.next_chunk)
-    if (!Number.isFinite(next) || next <= chunkIndex) {
-      throw new Error('Üretim ilerlemesi alınamadı — tekrar dene')
-    }
-    chunkIndex = next
   }
 
-  await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
-  throw new Error('Üretim çok uzun sürdü — tekrar dene')
+  return data
+}
+
+export type ChapterArtifactKind =
+  | 'brief'
+  | 'detailed'
+  | 'practice'
+  | 'mind_map'
+
+/**
+ * Generate (or return DB-cached) chapter artifact on demand.
+ * Initial “Üret” only builds standard notes; depths / drills / map load on click.
+ */
+export async function ensureChapterArtifact(input: {
+  chapterId: string
+  kind: ChapterArtifactKind
+  title?: string
+  force?: boolean
+}) {
+  const { data, error } = await supabase.functions.invoke(
+    'generate-chapter-artifact',
+    {
+      body: {
+        chapter_id: input.chapterId,
+        kind: input.kind,
+        title: input.title || undefined,
+        force: input.force || false,
+      },
+    },
+  )
+  if (error) throw new Error(await extractFunctionsError(error, data))
+  if (data?.error) throw new Error(String(data.error))
+  return data as {
+    ok: boolean
+    cached: boolean
+    kind: ChapterArtifactKind
+    weak?: boolean
+    quality?: { score?: number; ok?: boolean; issues?: string[] }
+  }
 }
 
 export async function markBookReady(bookId: string) {
@@ -604,7 +652,18 @@ export async function askAboutSelection(input: {
   followingContext?: string
   question: string
   history: Array<{ role: 'user' | 'assistant'; content: string }>
+  /** Cropped chart/figure as data URL for MiMo vision. */
+  imageDataUrl?: string
+  /** When true, image_url is required (chart marquee). */
+  requireImage?: boolean
 }) {
+  const imageUrl = (input.imageDataUrl || '').trim()
+  if (input.requireImage && !imageUrl.startsWith('data:image/')) {
+    throw new Error(
+      'Grafik görüntüsü eksik — alanı yeniden seç (⬚ Alan).',
+    )
+  }
+
   const { data, error } = await supabase.functions.invoke('chat-with-chapter', {
     body: {
       chapter_id: input.chapterId,
@@ -614,6 +673,8 @@ export async function askAboutSelection(input: {
       following_context: input.followingContext || '',
       question: input.question,
       history: input.history,
+      image_url: imageUrl,
+      vision: !!imageUrl,
     },
   })
 
@@ -623,6 +684,12 @@ export async function askAboutSelection(input: {
 
   if (data?.error) throw new Error(String(data.error))
   if (typeof data?.answer !== 'string') throw new Error('Boş AI yanıtı')
+  // Server should echo vision:true when image was used
+  if (input.requireImage && data?.vision !== true) {
+    throw new Error(
+      'Sunucu grafiği alamadı (eski fonksiyon?). chat-with-chapter’ı yeniden deploy et.',
+    )
+  }
   return data.answer as string
 }
 
@@ -716,4 +783,196 @@ export async function generateMorePractice(input: {
     .slice(0, count)
   if (!examples.length) throw new Error('Yeni örnek üretilemedi')
   return { examples }
+}
+
+export function aiUsageOperationLabel(
+  op: string,
+  meta?: Record<string, unknown> | null,
+): string {
+  switch (op) {
+    case 'chapter_notes': {
+      const chunk = Number(meta?.chunk_index)
+      const total = Number(meta?.total_chunks)
+      if (Number.isFinite(chunk) && Number.isFinite(total) && total > 1) {
+        return `Standart anlatım (parça ${chunk + 1}/${total})`
+      }
+      return 'Standart anlatım'
+    }
+    case 'artifact_brief':
+      return 'Kısa özet'
+    case 'artifact_detailed':
+      return 'Detaylı anlatım'
+    case 'artifact_practice':
+      return 'Alıştır (quiz/örnek)'
+    case 'artifact_mind_map':
+      return 'Zihin haritası'
+    case 'chapter_chat':
+      return 'Seçim sohbeti'
+    case 'segment':
+      return 'Ünite segmentasyonu'
+    case 'pack':
+      return 'Ünite paketleme'
+    default:
+      return op
+  }
+}
+
+export type AiUsageTotals = {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  cached_tokens: number
+  /** prompt_tokens - cached_tokens (approx. billable input) */
+  prompt_miss_tokens: number
+  events: number
+}
+
+/** Recent LLM token events for a book (and optionally one chapter). */
+export async function fetchAiUsageEvents(input: {
+  bookId: string
+  chapterId?: string | null
+  /** When true with chapterId, only that chapter. Default: whole book. */
+  chapterOnly?: boolean
+  limit?: number
+}): Promise<{ events: AiUsageEvent[]; totals: AiUsageTotals }> {
+  const limit = Math.min(200, Math.max(10, input.limit ?? 80))
+  const chapterOnly = !!input.chapterOnly && !!input.chapterId
+
+  // Prefer chapter_id when scoped (survives null book_id on older rows).
+  // Book scope: match book_id OR any event for this chapter (safety net).
+  let q = supabase
+    .from('ai_usage_events')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (chapterOnly && input.chapterId) {
+    q = q.eq('chapter_id', input.chapterId)
+  } else if (input.chapterId) {
+    q = q.or(
+      `book_id.eq.${input.bookId},chapter_id.eq.${input.chapterId}`,
+    )
+  } else {
+    q = q.eq('book_id', input.bookId)
+  }
+
+  const { data, error } = await q
+  if (error) throw new Error(error.message)
+
+  const events = ((data || []) as AiUsageEvent[]).map((e) => ({
+    ...e,
+    cached_tokens: e.cached_tokens ?? 0,
+  }))
+  const totals = events.reduce<AiUsageTotals>(
+    (acc, e) => {
+      const cached = e.cached_tokens || 0
+      acc.prompt_tokens += e.prompt_tokens || 0
+      acc.completion_tokens += e.completion_tokens || 0
+      acc.total_tokens += e.total_tokens || 0
+      acc.cached_tokens += cached
+      acc.prompt_miss_tokens += Math.max(0, (e.prompt_tokens || 0) - cached)
+      acc.events += 1
+      return acc
+    },
+    {
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+      cached_tokens: 0,
+      prompt_miss_tokens: 0,
+      events: 0,
+    },
+  )
+  return { events, totals }
+}
+
+type BundleArtifactResult = {
+  kind: ChapterArtifactKind
+  ok: boolean
+  cached?: boolean
+  usage?: {
+    prompt_tokens?: number
+    cached_tokens?: number
+    completion_tokens?: number
+  }
+  error?: string
+}
+
+/**
+ * Hybrid Toplu üret:
+ * 1) Edge warm phase: notes + detailed (same isolate → detailed Cache Hit, no 546)
+ * 2) Client: brief → practice → mind_map (short invokes, should Cache Hit)
+ */
+export async function generateChapterBundle(input: {
+  id: string
+  title: string
+  style?: string
+  forceArtifacts?: boolean
+}) {
+  const { data, error } = await supabase.functions.invoke(
+    'generate-chapter-bundle',
+    {
+      body: {
+        chapter_id: input.id,
+        title: input.title,
+        style: input.style || undefined,
+        force: input.forceArtifacts !== false,
+        phase: 'warm',
+      },
+    },
+  )
+
+  if (error) {
+    const detail = await extractFunctionsError(error, data)
+    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
+    throw new Error(detail)
+  }
+  if (data?.error) {
+    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
+    throw new Error(String(data.error))
+  }
+
+  const artifacts: BundleArtifactResult[] = [
+    ...((data?.artifacts || []) as BundleArtifactResult[]),
+  ]
+
+  const remaining = (data?.remaining_kinds || [
+    'brief',
+    'practice',
+    'mind_map',
+  ]) as ChapterArtifactKind[]
+
+  for (const kind of remaining) {
+    try {
+      const art = await ensureChapterArtifact({
+        chapterId: input.id,
+        title: input.title,
+        kind,
+        force: input.forceArtifacts !== false,
+      })
+      artifacts.push({
+        kind,
+        ok: true,
+        cached: art?.cached,
+        usage: (art as { usage?: BundleArtifactResult['usage'] })?.usage,
+      })
+      await sleep(350)
+    } catch (err) {
+      artifacts.push({
+        kind,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  return {
+    notes: {
+      usage: data?.notes_usage,
+      done: true,
+    },
+    artifacts,
+    prefix_fp: data?.prefix_fp as string | undefined,
+    phase: data?.phase as string | undefined,
+  }
 }

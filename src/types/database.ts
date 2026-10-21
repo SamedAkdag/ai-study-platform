@@ -50,6 +50,8 @@ export type PageSource = {
 export type MindMapBranch = {
   label: string
   children?: string[]
+  /** Best PDF page for this branch when known */
+  page?: number | null
 }
 
 export type MindMapData = {
@@ -88,6 +90,35 @@ export type Chapter = {
   page_text: string | null
   status: ChapterStatus
   created_at: string
+}
+
+export type AiUsageOperation =
+  | 'chapter_notes'
+  | 'artifact_brief'
+  | 'artifact_detailed'
+  | 'artifact_practice'
+  | 'artifact_mind_map'
+  | 'chapter_chat'
+  | 'segment'
+  | 'pack'
+  | 'other'
+
+export type AiUsageEvent = {
+  id: string
+  created_at: string
+  book_id: string | null
+  chapter_id: string | null
+  user_id: string | null
+  operation: AiUsageOperation | string
+  provider: string | null
+  model: string | null
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  /** MiMo prefix KV cache hits */
+  cached_tokens: number
+  estimated: boolean
+  meta: Record<string, unknown> | null
 }
 
 export type Message = {
@@ -135,6 +166,7 @@ export type PdfAnnotationRow = {
   question: string | null
   anchor_top_pct: number | null
   anchor_left_pct: number | null
+  text_style: Record<string, unknown> | null
   created_at: string
 }
 
@@ -368,6 +400,7 @@ export type Database = {
           question?: string | null
           anchor_top_pct?: number | null
           anchor_left_pct?: number | null
+          text_style?: Record<string, unknown> | null
           created_at?: string
         },
         Partial<PdfAnnotationRow>
@@ -511,6 +544,26 @@ export type Database = {
           updated_at?: string
         },
         Partial<StudyFocus>
+      >
+      ai_usage_events: TableDef<
+        AiUsageEvent,
+        {
+          id?: string
+          created_at?: string
+          book_id?: string | null
+          chapter_id?: string | null
+          user_id?: string | null
+          operation: string
+          provider?: string | null
+          model?: string | null
+          prompt_tokens?: number
+          completion_tokens?: number
+          total_tokens?: number
+          cached_tokens?: number
+          estimated?: boolean
+          meta?: Record<string, unknown> | null
+        },
+        Partial<AiUsageEvent>
       >
     }
     Views: {

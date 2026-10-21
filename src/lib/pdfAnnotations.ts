@@ -1,6 +1,13 @@
+import type { PdfTextStyle } from '@/lib/pdfTextStyle'
+import type { PdfRegion } from '@/lib/pdfRegion'
+
 export type PdfAnnotationKind =
   | 'note'
   | 'highlight'
+  | 'underline'
+  | 'strike'
+  | 'replace'
+  | 'redact'
   | 'omit'
   | 'extract'
   | 'cite'
@@ -15,7 +22,7 @@ export type PdfAnnotation = {
   page: number
   kind: PdfAnnotationKind
   quote: string
-  /** User note / citation / AI answer body */
+  /** User note / citation / AI answer body / replacement text */
   body?: string
   /** apa | ieee | bibtex when kind === 'cite' */
   citeStyle?: string
@@ -26,6 +33,10 @@ export type PdfAnnotation = {
   /** Vertical anchor as fraction of page height (0–1), under the quote */
   anchorTopPct?: number
   anchorLeftPct?: number
+  /** Sampled from selection so insert body matches PDF typography */
+  textStyle?: PdfTextStyle
+  /** Page box for burn-in (replace / redact) */
+  region?: PdfRegion
   createdAt: string
 }
 
@@ -84,6 +95,8 @@ export function updatePdfAnnotation(
       | 'aiMode'
       | 'anchorTopPct'
       | 'anchorLeftPct'
+      | 'textStyle'
+      | 'region'
     >
   >,
 ): PdfAnnotation[] {
@@ -115,6 +128,10 @@ export function removePdfAnnotation(
 export function annotationKindLabel(kind: PdfAnnotationKind): string {
   if (kind === 'note') return 'Benim notum'
   if (kind === 'highlight') return 'Vurgu'
+  if (kind === 'underline') return 'Altı çizili'
+  if (kind === 'strike') return 'Üstü çizili'
+  if (kind === 'replace') return 'Değiştirildi'
+  if (kind === 'redact') return 'Sansür'
   if (kind === 'omit') return 'Çıkarıldı'
   if (kind === 'extract') return 'Alıntı'
   if (kind === 'cite') return 'Cite'

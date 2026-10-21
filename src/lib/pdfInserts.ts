@@ -15,7 +15,15 @@ export type PageSegment =
 
 /** Annotations that become in-flow book inserts (not mere highlights). */
 export function isFlowInsert(a: PdfAnnotation): boolean {
-  if (a.kind === 'highlight' || a.kind === 'omit' || a.kind === 'bookmark') {
+  if (
+    a.kind === 'highlight' ||
+    a.kind === 'underline' ||
+    a.kind === 'strike' ||
+    a.kind === 'redact' ||
+    a.kind === 'replace' ||
+    a.kind === 'omit' ||
+    a.kind === 'bookmark'
+  ) {
     return false
   }
   return !!(a.body && a.body.trim()) || a.kind === 'note' || a.kind === 'ai'

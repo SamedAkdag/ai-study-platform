@@ -54,7 +54,7 @@ export function buildMindMapTopicDetail(input: {
   const points = (input.children ?? [])
     .map((c) => c.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
-    .slice(0, 8)
+    .slice(0, 12)
 
   const md = String(input.markdown || '')
   const paras = paragraphs(md)

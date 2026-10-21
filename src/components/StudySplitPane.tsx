@@ -85,7 +85,7 @@ export default function StudySplitPane({
     <div className={`study-split ${className}`}>
       <div className="study-split__toolbar">
         <div
-          className="study-split__mobile-tabs md:hidden"
+          className="study-split__mobile-tabs md:hidden mode-segment mode-segment--primary"
           role="tablist"
           aria-label="Panel"
         >
@@ -96,7 +96,7 @@ export default function StudySplitPane({
             className={`chip ${mobilePane === 'pdf' ? 'chip-active' : 'chip-idle'}`}
             onClick={() => onMobilePaneChange?.('pdf')}
           >
-            Kaynak
+            PDF
           </button>
           <button
             type="button"
@@ -109,24 +109,25 @@ export default function StudySplitPane({
           </button>
         </div>
 
-        <div className="study-split__presets hidden md:flex" role="group" aria-label="PDF oranı">
-          <span className="study-split__presets-label">PDF</span>
+        <div
+          className="study-split__presets hidden md:flex"
+          role="group"
+          aria-label="PDF oranı"
+        >
+          <span className="study-split__presets-label">Düzen</span>
           {PRESETS.map((p) => (
             <button
               key={p.id}
               type="button"
-              className={`chip ${
-                activePreset?.id === p.id ? 'chip-active' : 'chip-idle'
+              className={`study-split__preset${
+                activePreset?.id === p.id ? ' is-active' : ''
               }`}
               aria-pressed={activePreset?.id === p.id}
               onClick={() => persist(p.ratio)}
             >
-              {p.label}%
+              {p.label}/{100 - Number(p.label)}
             </button>
           ))}
-          <span className="study-split__presets-hint muted">
-            Sürükle · çift tık 50%
-          </span>
         </div>
       </div>
 

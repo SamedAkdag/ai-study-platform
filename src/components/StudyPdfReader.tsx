@@ -33,6 +33,10 @@ type Props = {
   omittedQuotes?: string[]
   highlightedQuotes?: string[]
   annotations?: PdfAnnotation[]
+  bookId?: string
+  chapterId?: string
+  chapterTitle?: string
+  onAnnotationsChange?: () => void
   onAction?: (payload: PdfSelectionPayload, action: PdfSelectionAction) => void
   className?: string
 }
@@ -197,6 +201,10 @@ export default function StudyPdfReader({
   omittedQuotes = [],
   highlightedQuotes = [],
   annotations = [],
+  bookId,
+  chapterId,
+  chapterTitle,
+  onAnnotationsChange,
   onAction,
   className = '',
 }: Props) {
@@ -333,6 +341,7 @@ export default function StudyPdfReader({
         precedingContext: snap.precedingContext,
         followingContext: snap.followingContext,
         page,
+        textStyle: snap.textStyle,
       },
       action,
     )
@@ -440,6 +449,14 @@ export default function StudyPdfReader({
               src={pdfSrc}
               page={page}
               onPageChange={onPageChange}
+              omittedQuotes={omittedQuotes}
+              highlightedQuotes={highlightedQuotes}
+              annotations={annotations}
+              bookId={bookId}
+              chapterId={chapterId}
+              chapterTitle={chapterTitle || bookTitle || 'PDF'}
+              onAnnotationsChange={onAnnotationsChange}
+              onAction={onAction}
               hideChrome
               className="study-pdf-col-fallback__viewer"
             />

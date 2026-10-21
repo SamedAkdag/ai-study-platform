@@ -214,6 +214,13 @@ async function markdownToStyledPdf(
         imgWmm,
         sliceHmm,
       )
+
+      // Light Studium watermark (Adobe-style shared-copy mark)
+      pdf.setFont('helvetica', 'normal')
+      pdf.setFontSize(8)
+      pdf.setTextColor(160, 160, 160)
+      pdf.text('Studium', pageW - margin, pageH - 6, { align: 'right' })
+      pdf.setTextColor(22, 37, 50)
     }
 
     const stamp = new Date().toISOString().slice(0, 10)
@@ -339,6 +346,11 @@ ${tbody}
 </table></div>`
 
   return { html, next: i }
+}
+
+/** Markdown → semantic HTML (tables, lists, headings) for PDF / insert export. */
+export function markdownToHtml(md: string): string {
+  return mdToHtml(md)
 }
 
 /** Markdown → semantic HTML for the styled print document. */

@@ -8,6 +8,10 @@ import {
   type PdfAnnotation,
   type PdfAiMode,
 } from '@/lib/pdfAnnotations'
+import {
+  pdfTextStyleToReact,
+  type PdfTextStyle,
+} from '@/lib/pdfTextStyle'
 import type { PdfSelectionPayload } from '@/types/pdfSelection'
 
 const MODE_Q: Record<PdfAiMode, string> = {
@@ -30,6 +34,11 @@ export type InsertDraft =
       payload: PdfSelectionPayload
       y: number
     }
+  | {
+      kind: 'replace'
+      payload: PdfSelectionPayload
+      y: number
+    }
 
 type Props = {
   annotation?: PdfAnnotation
@@ -49,7 +58,16 @@ type Props = {
     body: string
     y: number
   }) => void
+  onCommitReplace?: (input: {
+    payload: PdfSelectionPayload
+    body: string
+    y: number
+  }) => void
   onRemove?: (id: string) => void
+}
+
+function matchClass(style?: PdfTextStyle | null) {
+  return style ? ' pdf-insert--matched' : ''
 }
 
 /** In-flow book insert — sits between sliced PDF bands (opens real space). */
@@ -61,6 +79,7 @@ export default function PdfInsertBlock({
   onDismissDraft,
   onCommitAi,
   onCommitNote,
+  onCommitReplace,
   onRemove,
 }: Props) {
   if (draft) {
@@ -72,6 +91,7 @@ export default function PdfInsertBlock({
         onDismiss={onDismissDraft}
         onCommitAi={onCommitAi}
         onCommitNote={onCommitNote}
+        onCommitReplace={onCommitReplace}
       />
     )
   }
@@ -81,16 +101,38 @@ export default function PdfInsertBlock({
     annotation.kind === 'ai'
       ? annotationAiLabel(annotation.aiMode)
       : annotationKindLabel(annotation.kind)
+  const textStyle = annotation.textStyle
+  const isReplace = annotation.kind === 'replace'
 
   return (
-    <section className="pdf-insert" data-insert-id={annotation.id}>
+    <section
+      className={`pdf-insert${matchClass(textStyle)}${
+        annotation.kind === 'ai' ? ' pdf-insert--ai' : ''
+      }${isReplace ? ' pdf-insert--replace' : ''}`}
+      data-insert-id={annotation.id}
+      style={pdfTextStyleToReact(textStyle)}
+    >
       <header className="pdf-insert__head">
         <div>
-          <p className="pdf-insert__label">{label}</p>
-          <p className="pdf-insert__quote">
-            “…{annotation.quote.slice(0, 160)}
-            {annotation.quote.length > 160 ? '…' : ''}”
+          <p className="pdf-insert__label">
+            {label}
+            {textStyle ? (
+              <span className="pdf-insert__style-badge" title="Seçilen PDF yazı stiline uyumlu">
+                · PDF stili
+              </span>
+            ) : null}
           </p>
+          {!isReplace ? (
+            <p className="pdf-insert__quote">
+              “…{annotation.quote.slice(0, 160)}
+              {annotation.quote.length > 160 ? '…' : ''}”
+            </p>
+          ) : (
+            <p className="pdf-insert__quote pdf-insert__quote--was">
+              Eski: “…{annotation.quote.slice(0, 120)}
+              {annotation.quote.length > 120 ? '…' : ''}”
+            </p>
+          )}
         </div>
         {onRemove ? (
           <button
@@ -106,9 +148,13 @@ export default function PdfInsertBlock({
         <p className="pdf-insert__question">Soru · {annotation.question}</p>
       ) : null}
       {annotation.body ? (
-        <div className="pdf-insert__body prose study-textbook max-w-none text-sm">
-          <StudyMarkdown markdown={annotation.body} />
-        </div>
+        isReplace ? (
+          <p className="pdf-insert__body pdf-insert__replace-text">{annotation.body}</p>
+        ) : (
+          <div className="pdf-insert__body prose study-textbook max-w-none text-sm">
+            <StudyMarkdown markdown={annotation.body} />
+          </div>
+        )
       ) : (
         <p className="muted text-xs">İçerik yok.</p>
       )}
@@ -123,6 +169,7 @@ function DraftInsert({
   onDismiss,
   onCommitAi,
   onCommitNote,
+  onCommitReplace,
 }: {
   draft: InsertDraft
   chapterId: string
@@ -130,14 +177,18 @@ function DraftInsert({
   onDismiss?: () => void
   onCommitAi?: Props['onCommitAi']
   onCommitNote?: Props['onCommitNote']
+  onCommitReplace?: Props['onCommitReplace']
 }) {
   const [question, setQuestion] = useState('')
   const [askedQuestion, setAskedQuestion] = useState<string | undefined>()
   const [noteBody, setNoteBody] = useState('')
+  const [replaceBody, setReplaceBody] = useState(draft.payload.selectedText)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [answer, setAnswer] = useState<string | null>(null)
   const askedRef = useRef<string | null>(null)
+  const textStyle = draft.payload.textStyle
+  const shellStyle = pdfTextStyleToReact(textStyle)
 
   useEffect(() => {
     if (draft.kind !== 'ai' || draft.mode === 'ask') return
@@ -178,6 +229,58 @@ function DraftInsert({
     }
   }, [draft, chapterId, chapterTitle])
 
+  if (draft.kind === 'replace') {
+    return (
+      <section
+        className={`pdf-insert pdf-insert--draft pdf-insert--replace${matchClass(textStyle)}`}
+        style={shellStyle}
+      >
+        <header className="pdf-insert__head">
+          <p className="pdf-insert__label">
+            Metni değiştir
+            {textStyle ? (
+              <span className="pdf-insert__style-badge">· PDF stili</span>
+            ) : null}
+          </p>
+          <button type="button" className="btn-ghost text-[11px]" onClick={onDismiss}>
+            Vazgeç
+          </button>
+        </header>
+        <p className="pdf-insert__quote pdf-insert__quote--was">
+          Seçilen: “…{draft.payload.selectedText.slice(0, 160)}
+          {draft.payload.selectedText.length > 160 ? '…' : ''}”
+        </p>
+        <textarea
+          className="field mt-2 text-sm pdf-insert__match-field"
+          rows={3}
+          autoFocus
+          placeholder="Yeni metin…"
+          value={replaceBody}
+          onChange={(e) => setReplaceBody(e.target.value)}
+        />
+        <div className="pdf-insert__actions">
+          <button
+            type="button"
+            className="btn-primary text-xs"
+            disabled={!replaceBody.trim()}
+            onClick={() =>
+              onCommitReplace?.({
+                payload: draft.payload,
+                body: replaceBody.trim(),
+                y: draft.y,
+              })
+            }
+          >
+            Uygula
+          </button>
+          <button type="button" className="btn-ghost text-xs" onClick={onDismiss}>
+            Vazgeç
+          </button>
+        </div>
+      </section>
+    )
+  }
+
   async function sendAsk(e: FormEvent) {
     e.preventDefault()
     if (draft.kind !== 'ai' || !question.trim() || loading) return
@@ -210,9 +313,17 @@ function DraftInsert({
 
   if (draft.kind === 'note') {
     return (
-      <section className="pdf-insert pdf-insert--draft">
+      <section
+        className={`pdf-insert pdf-insert--draft${matchClass(textStyle)}`}
+        style={shellStyle}
+      >
         <header className="pdf-insert__head">
-          <p className="pdf-insert__label">Not ekle · seçimin altına</p>
+          <p className="pdf-insert__label">
+            Not ekle · seçimin altına
+            {textStyle ? (
+              <span className="pdf-insert__style-badge">· PDF stili</span>
+            ) : null}
+          </p>
           <button type="button" className="btn-ghost text-[11px]" onClick={onDismiss}>
             Vazgeç
           </button>
@@ -222,7 +333,7 @@ function DraftInsert({
           {draft.payload.selectedText.length > 160 ? '…' : ''}”
         </p>
         <textarea
-          className="field mt-2 text-sm"
+          className="field mt-2 text-sm pdf-insert__match-field"
           rows={3}
           autoFocus
           placeholder="Bu cümlenin altına eklenecek not…"
@@ -253,10 +364,16 @@ function DraftInsert({
   }
 
   return (
-    <section className="pdf-insert pdf-insert--draft pdf-insert--ai">
+    <section
+      className={`pdf-insert pdf-insert--draft pdf-insert--ai${matchClass(textStyle)}`}
+      style={shellStyle}
+    >
       <header className="pdf-insert__head">
         <p className="pdf-insert__label">
           {annotationAiLabel(draft.mode)} · seçimin altına
+          {textStyle ? (
+            <span className="pdf-insert__style-badge">· PDF stili</span>
+          ) : null}
         </p>
         <button type="button" className="btn-ghost text-[11px]" onClick={onDismiss}>
           Vazgeç

@@ -39,7 +39,7 @@ serve(async (req) => {
         ]
       : message
 
-    const text = await callMimo(
+    const { text, usage } = await callMimo(
       [{ role: 'user', content: userContent }],
       { json: false, temperature: 0.2, maxTokens: 256 },
     )
@@ -51,6 +51,7 @@ serve(async (req) => {
         model,
         vision: !!imageUrl,
         reply: text,
+        usage,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     )

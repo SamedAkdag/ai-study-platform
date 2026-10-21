@@ -6,6 +6,12 @@ verify_jwt = true
 [functions.generate-chapter-content]
 verify_jwt = true
 
+[functions.generate-chapter-artifact]
+verify_jwt = true
+
+[functions.generate-chapter-bundle]
+verify_jwt = true
+
 [functions.chat-with-chapter]
 verify_jwt = true
 

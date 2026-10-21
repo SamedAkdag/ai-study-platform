@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchBook, fetchChapters } from '@/lib/api'
@@ -34,6 +34,15 @@ import {
   type PdfAnnotation,
   updatePdfAnnotation,
 } from '@/lib/pdfAnnotations'
+import {
+  downloadNotesMarkdown,
+  downloadNotesPdf,
+  exportableNotes,
+} from '@/lib/exportNotesPdf'
+import { downloadPdfWithInserts } from '@/lib/exportPdfWithInserts'
+import PdfOrganizePanel from '@/components/PdfOrganizePanel'
+import { rememberPdf } from '@/lib/pdfSession'
+import { fetchPdfBytes, pdfBytesToBlob } from '@/lib/pdfManipulate'
 
 type ViewMode = 'study' | 'original'
 
@@ -62,6 +71,11 @@ export default function BookReadPage() {
   const [noteBody, setNoteBody] = useState('')
   const [toast, setToast] = useState<string | null>(null)
   const [importStatus, setImportStatus] = useState<ImportJobStatus | null>(null)
+  const [organizeOpen, setOrganizeOpen] = useState(false)
+  const [pdfRefresh, setPdfRefresh] = useState(0)
+  const [workingBytes, setWorkingBytes] = useState<Uint8Array | null>(null)
+  const [workingUrl, setWorkingUrl] = useState<string | null>(null)
+  const workingSeedGen = useRef(0)
 
   useEffect(() => {
     setReaderPage(1)
@@ -92,11 +106,49 @@ export default function BookReadPage() {
     enabled: !!bookId,
   })
 
-  const pdf = useBookPdfUrl(bookId, bookQuery.data?.file_url)
+  const pdf = useBookPdfUrl(bookId, bookQuery.data?.file_url, pdfRefresh)
   const chapters = chaptersQuery.data ?? []
   const hasUnits = chapters.length > 0
   const firstReady = chapters.find((c) => c.status === 'ready')
   const isProcessing = bookQuery.data?.status === 'processing'
+
+  // Session working copy — pdf-lib edits + organize share these bytes
+  useEffect(() => {
+    if (!pdf.url) {
+      workingSeedGen.current += 1
+      setWorkingBytes(null)
+      return
+    }
+    const gen = ++workingSeedGen.current
+    let cancelled = false
+    void (async () => {
+      try {
+        const raw = await fetchPdfBytes(pdf.url!)
+        if (!cancelled && gen === workingSeedGen.current) setWorkingBytes(raw)
+      } catch {
+        if (!cancelled && gen === workingSeedGen.current) setWorkingBytes(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [pdf.url, pdfRefresh])
+
+  useEffect(() => {
+    if (!workingBytes) {
+      setWorkingUrl(null)
+      return
+    }
+    const url = URL.createObjectURL(pdfBytesToBlob(workingBytes))
+    setWorkingUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [workingBytes])
+
+  function applyWorkingBytes(next: Uint8Array) {
+    workingSeedGen.current += 1
+    setWorkingBytes(next)
+    if (bookId) rememberPdf(bookId, pdfBytesToBlob(next))
+  }
 
   const hasReadable = pages.some((p) => !pageNeedsOcr(p.text))
   const loadingMore = importStatus?.phase === 'extracting'
@@ -168,7 +220,10 @@ export default function BookReadPage() {
   }, [bookId, queryClient])
 
   const omittedQuotes = useMemo(
-    () => notes.filter((n) => n.kind === 'omit').map((n) => n.quote),
+    () =>
+      notes
+        .filter((n) => n.kind === 'omit' || n.kind === 'replace')
+        .map((n) => n.quote),
     [notes],
   )
   const highlightedQuotes = useMemo(
@@ -179,6 +234,18 @@ export default function BookReadPage() {
             n.kind === 'highlight' || n.kind === 'note' || n.kind === 'ai',
         )
         .map((n) => n.quote),
+    [notes],
+  )
+  const underlinedQuotes = useMemo(
+    () => notes.filter((n) => n.kind === 'underline').map((n) => n.quote),
+    [notes],
+  )
+  const struckQuotes = useMemo(
+    () => notes.filter((n) => n.kind === 'strike').map((n) => n.quote),
+    [notes],
+  )
+  const redactedQuotes = useMemo(
+    () => notes.filter((n) => n.kind === 'redact').map((n) => n.quote),
     [notes],
   )
 
@@ -215,7 +282,10 @@ export default function BookReadPage() {
   ) {
     if (!bookId) return
 
+    // AI / note → sağ panel (sayfa dilimleme yok)
     if (action === 'ask' || action === 'summarize' || action === 'explain') {
+      setDraftCite(null)
+      setDraftNote(null)
       setSel(payload)
       setMode(action)
       setMobilePane('notes')
@@ -223,6 +293,8 @@ export default function BookReadPage() {
     }
 
     if (action === 'note') {
+      setSel(null)
+      setMode(null)
       setDraftCite(null)
       setDraftNote({ payload })
       setNoteBody('')
@@ -237,14 +309,55 @@ export default function BookReadPage() {
       return
     }
 
+    if (action === 'copy') {
+      void navigator.clipboard
+        ?.writeText(payload.selectedText)
+        .then(() => flash('Kopyalandı'))
+        .catch(() => flash('Kopyalanamadı'))
+      return
+    }
+
+    if (action === 'redact') {
+      flash('Sansürlendi — PDF güncellendi')
+      return
+    }
+
+    if (action === 'replace') {
+      flash('Metin güncellendi (sayfa değişince PDF’ye yazılır)')
+      return
+    }
+
     if (action === 'highlight') {
       addPdfAnnotation(bookId, {
         page: payload.page,
         kind: 'highlight',
         quote: payload.selectedText,
+        textStyle: payload.textStyle,
       })
       refreshNotes()
       flash('Vurgulandı')
+      return
+    }
+
+    if (action === 'underline') {
+      addPdfAnnotation(bookId, {
+        page: payload.page,
+        kind: 'underline',
+        quote: payload.selectedText,
+      })
+      refreshNotes()
+      flash('Altı çizildi')
+      return
+    }
+
+    if (action === 'strike') {
+      addPdfAnnotation(bookId, {
+        page: payload.page,
+        kind: 'strike',
+        quote: payload.selectedText,
+      })
+      refreshNotes()
+      flash('Üstü çizildi')
       return
     }
 
@@ -260,7 +373,6 @@ export default function BookReadPage() {
     }
 
     if (action === 'extract') {
-      // Legacy “Alıntıla” → Cite draft (same destination)
       setDraftNote(null)
       setDraftCite({ payload })
       setMobilePane('notes')
@@ -285,12 +397,64 @@ export default function BookReadPage() {
       kind: 'note',
       quote: draftNote.payload.selectedText,
       body: noteBody.trim() || undefined,
+      textStyle: draftNote.payload.textStyle,
+      region: draftNote.payload.region,
+      anchorTopPct: draftNote.payload.region
+        ? Math.min(
+            0.98,
+            draftNote.payload.region.topPct +
+              draftNote.payload.region.heightPct,
+          )
+        : 0.42,
+      anchorLeftPct: draftNote.payload.region?.leftPct ?? 0.06,
     })
     setDraftNote(null)
     setNoteBody('')
     refreshNotes()
-    flash('Notun kaydedildi')
+    setMobilePane('pdf')
+    setViewMode('original')
+    flash('Not seçimin altına eklendi')
   }
+
+  function saveAiToPdf(input: {
+    payload: PdfSelectionPayload
+    mode: 'ask' | 'summarize' | 'explain'
+    body: string
+    question?: string
+  }) {
+    if (!bookId) throw new Error('Kitap kimliği yok')
+    const body = (input.body || '').trim()
+    if (!body) throw new Error('Eklenecek AI metni yok')
+
+    const region = input.payload.region
+    // Seçimin bittiği yere (cümle sonu) — eski usul
+    const anchorTopPct = region
+      ? Math.min(0.98, region.topPct + region.heightPct)
+      : 0.42
+
+    addPdfAnnotation(bookId, {
+      page: input.payload.page,
+      kind: 'ai',
+      aiMode: input.mode,
+      quote: input.payload.selectedText,
+      question: input.question,
+      body,
+      textStyle: input.payload.textStyle,
+      region,
+      anchorTopPct,
+      anchorLeftPct: region?.leftPct ?? 0.06,
+    })
+    setNotes(loadPdfAnnotations(bookId))
+    flash('AI seçimin altına eklendi')
+    setMobilePane('pdf')
+    setViewMode('original')
+    setReaderPage(input.payload.page)
+    setSel(null)
+    setMode(null)
+  }
+
+  const insertChapterId =
+    firstReady?.id || chapters[0]?.id || bookId || ''
 
   const leftPane =
     viewMode === 'study' && hasReadable ? (
@@ -305,18 +469,27 @@ export default function BookReadPage() {
         omittedQuotes={omittedQuotes}
         highlightedQuotes={highlightedQuotes}
         annotations={notes}
+        bookId={bookId}
+        chapterId={insertChapterId}
+        chapterTitle={bookQuery.data?.title || 'PDF'}
+        onAnnotationsChange={refreshNotes}
         onAction={handleAction}
       />
-    ) : pdf.url ? (
+    ) : (workingUrl || pdf.url) && bookId ? (
       <PdfViewer
-        src={pdf.url}
+        src={workingUrl || pdf.url!}
+        data={workingBytes ?? undefined}
+        onWorkingBytesChange={applyWorkingBytes}
         page={readerPage}
         onPageChange={setReaderPage}
         omittedQuotes={omittedQuotes}
         highlightedQuotes={highlightedQuotes}
+        underlinedQuotes={underlinedQuotes}
+        struckQuotes={struckQuotes}
+        redactedQuotes={redactedQuotes}
         annotations={notes}
         bookId={bookId}
-        chapterId={firstReady?.id || bookId}
+        chapterId={insertChapterId}
         chapterTitle={bookQuery.data?.title || 'PDF'}
         onAnnotationsChange={refreshNotes}
         onAction={handleAction}
@@ -341,7 +514,7 @@ export default function BookReadPage() {
             {bookQuery.data?.title || 'PDF'}
           </h1>
           <p className="muted mt-1 max-w-xl text-xs leading-relaxed">
-            Kaynak paneli: metin görünümü veya orijinal PDF. Sağda Notlar.
+            Metin seç → AI / Not → Seçimin altına ekle: sayfa aralanır, kart araya girer.
           </p>
           <div
             className="mode-segment mode-segment--secondary mt-2.5"
@@ -384,6 +557,83 @@ export default function BookReadPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {pdf.url ? (
+            <button
+              type="button"
+              className={`chip text-sm ${organizeOpen ? 'chip-active' : 'chip-idle'}`}
+              onClick={() => {
+                setOrganizeOpen((v) => !v)
+                setMobilePane('notes')
+              }}
+            >
+              PDF düzenle
+            </button>
+          ) : null}
+          {workingBytes || pdf.url ? (
+            <button
+              type="button"
+              className="btn-ghost text-sm"
+              title="Kitabı AI / not ekleriyle birlikte indir"
+              onClick={() => {
+                void (async () => {
+                  try {
+                    flash('PDF hazırlanıyor…')
+                    let bytes = workingBytes
+                    if (!bytes && pdf.url) {
+                      bytes = await fetchPdfBytes(pdf.url)
+                    }
+                    if (!bytes) {
+                      flash('PDF bulunamadı')
+                      return
+                    }
+                    await downloadPdfWithInserts({
+                      pdfBytes: bytes,
+                      annotations: notes,
+                      filename: `${bookQuery.data?.title || 'studium'}-ai-ekli`,
+                      onProgress: (msg) => flash(msg),
+                    })
+                    flash(
+                      exportableNotes(notes).length
+                        ? 'Kitap AI ekleriyle indirildi'
+                        : 'Kitap indirildi',
+                    )
+                  } catch (err) {
+                    flash(friendlyAiError(err))
+                  }
+                })()
+              }}
+            >
+              Kitabı indir
+            </button>
+          ) : null}
+          {exportableNotes(notes).length > 0 ? (
+            <>
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                title="Sadece AI / not özeti (ayrı PDF)"
+                onClick={() => {
+                  void downloadNotesPdf(exportableNotes(notes), {
+                    bookTitle: bookQuery.data?.title || 'Studium',
+                  }).then(() => flash('Not özeti PDF indirildi'))
+                }}
+              >
+                Not özeti
+              </button>
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                onClick={() => {
+                  downloadNotesMarkdown(exportableNotes(notes), {
+                    bookTitle: bookQuery.data?.title || 'Studium',
+                  })
+                  flash('Markdown indirildi')
+                }}
+              >
+                İndir MD
+              </button>
+            </>
+          ) : null}
           {hasUnits ? (
             <Link to={`/books/${bookId}`} className="btn-ghost text-sm">
               Üniteler ({chapters.length})
@@ -464,6 +714,29 @@ export default function BookReadPage() {
         left={leftPane}
         right={
           <div className="study-split__notes-inner space-y-4 p-3 sm:p-4">
+            {organizeOpen && (workingUrl || pdf.url) && bookId ? (
+              <PdfOrganizePanel
+                pdfSrc={workingUrl || pdf.url!}
+                initialBytes={workingBytes}
+                bookId={bookId}
+                bookTitle={bookQuery.data?.title || 'PDF'}
+                onBytesChange={applyWorkingBytes}
+                onClose={() => setOrganizeOpen(false)}
+                onSaved={(blob) => {
+                  rememberPdf(bookId, blob)
+                  void blob.arrayBuffer().then((buf) => {
+                    setWorkingBytes(new Uint8Array(buf))
+                  })
+                  setPdfRefresh((n) => n + 1)
+                  setReaderPage(1)
+                  setViewMode('original')
+                  setMobilePane('pdf')
+                  flash('PDF güncellendi')
+                  void queryClient.invalidateQueries({ queryKey: ['book', bookId] })
+                }}
+              />
+            ) : null}
+
             {draftNote && (
               <div className="surface-panel space-y-3 p-4">
                 <p className="section-label mb-0">Benim notum</p>
@@ -511,6 +784,7 @@ export default function BookReadPage() {
                     quote: draftCite.payload.selectedText,
                     body: formatted,
                     citeStyle: style,
+                    textStyle: draftCite.payload.textStyle,
                   })
                   setDraftCite(null)
                   refreshNotes()
@@ -520,13 +794,25 @@ export default function BookReadPage() {
             )}
 
             <PdfAiPanel
-              chapterId={firstReady?.id || bookId || 'book'}
+              chapterId={insertChapterId || 'book'}
               chapterTitle={bookQuery.data?.title || 'PDF'}
               payload={sel}
               mode={mode}
               onClose={() => {
                 setSel(null)
                 setMode(null)
+              }}
+              onSaveToBook={(body, question) => {
+                if (!sel || !mode) {
+                  flash('Önce PDF’den metin seç')
+                  throw new Error('Seçim yok')
+                }
+                saveAiToPdf({
+                  payload: sel,
+                  mode,
+                  body,
+                  question,
+                })
               }}
             />
 
@@ -542,14 +828,14 @@ export default function BookReadPage() {
                   </p>
                   <ul className="muted mt-2 list-disc space-y-1 pl-4 text-sm leading-relaxed">
                     <li>
-                      Sol panel <strong>Kaynak</strong> — metin veya PDF
-                      tipografi
+                      Metin seç → <strong>Değiştir</strong> /{' '}
+                      <strong>Sansür</strong> / Vurgu
                     </li>
                     <li>
-                      Metin seç → özetle, sor, <strong>Cite</strong> (APA/IEEE/BibTeX)
+                      ⋯ : AI, not, cite, alt/üst çiz, kopyala
                     </li>
                     <li>
-                      Gerekirse <strong>PDF</strong> görünümüne geç
+                      <strong>PDF düzenle</strong> = sayfa sil / sırala / birleştir
                     </li>
                   </ul>
                 </div>

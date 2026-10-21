@@ -49,6 +49,111 @@ function isRateLimited(status: number, body: string): boolean {
   return /rate_limit|quota|too many requests/i.test(body)
 }
 
+export type TokenUsage = {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  /** MiMo / OpenAI-style prefix KV cache hits (prompt_tokens_details.cached_tokens). */
+  cached_tokens: number
+  /** True when API omitted usage and we estimated from char length. */
+  estimated: boolean
+}
+
+export type MimoResult = {
+  text: string
+  usage: TokenUsage
+}
+
+function contentCharLength(content: MimoMessage['content']): number {
+  if (typeof content === 'string') return content.length
+  return content.reduce((n, part) => {
+    if (part.type === 'text') return n + part.text.length
+    return n + 80 // rough image_url overhead
+  }, 0)
+}
+
+export function estimateTokenUsage(
+  messages: MimoMessage[],
+  outputText: string,
+): TokenUsage {
+  const inputChars = messages.reduce(
+    (n, m) => n + contentCharLength(m.content),
+    0,
+  )
+  const prompt_tokens = Math.max(1, Math.ceil(inputChars / 4))
+  const completion_tokens = Math.max(0, Math.ceil(String(outputText).length / 4))
+  return {
+    prompt_tokens,
+    completion_tokens,
+    total_tokens: prompt_tokens + completion_tokens,
+    cached_tokens: 0,
+    estimated: true,
+  }
+}
+
+function readCachedTokens(u: Record<string, unknown>): number {
+  const direct = Number(
+    u.cached_tokens ?? u.cache_read_tokens ?? u.cache_read_input_tokens ?? 0,
+  )
+  if (Number.isFinite(direct) && direct > 0) return Math.round(direct)
+
+  const details = u.prompt_tokens_details
+  if (details && typeof details === 'object') {
+    const d = details as Record<string, unknown>
+    const n = Number(d.cached_tokens ?? d.cache_read_tokens ?? 0)
+    if (Number.isFinite(n) && n > 0) return Math.round(n)
+  }
+
+  const inputDetails = u.input_tokens_details
+  if (inputDetails && typeof inputDetails === 'object') {
+    const d = inputDetails as Record<string, unknown>
+    const n = Number(d.cached_tokens ?? 0)
+    if (Number.isFinite(n) && n > 0) return Math.round(n)
+  }
+
+  return 0
+}
+
+export function extractTokenUsage(
+  payload: unknown,
+  fallback: TokenUsage,
+): TokenUsage {
+  const u = (payload as { usage?: Record<string, unknown> } | null)?.usage
+  if (!u || typeof u !== 'object') return fallback
+
+  const prompt = Number(
+    u.prompt_tokens ?? u.input_tokens ?? u.promptTokens ?? 0,
+  )
+  const completion = Number(
+    u.completion_tokens ?? u.output_tokens ?? u.completionTokens ?? 0,
+  )
+  const total = Number(u.total_tokens ?? u.totalTokens ?? 0)
+  const cached_tokens = Math.min(
+    Math.max(0, readCachedTokens(u)),
+    Math.max(0, Math.round(prompt) || 0) || Number.POSITIVE_INFINITY,
+  )
+
+  if (!Number.isFinite(prompt) && !Number.isFinite(completion)) return fallback
+  const prompt_tokens = Math.max(0, Math.round(prompt) || 0)
+  const completion_tokens = Math.max(0, Math.round(completion) || 0)
+  const total_tokens =
+    Math.max(0, Math.round(total) || 0) || prompt_tokens + completion_tokens
+
+  if (prompt_tokens === 0 && completion_tokens === 0 && total_tokens === 0) {
+    return fallback
+  }
+
+  return {
+    prompt_tokens,
+    completion_tokens,
+    total_tokens,
+    cached_tokens: Number.isFinite(cached_tokens)
+      ? Math.min(cached_tokens, prompt_tokens)
+      : 0,
+    estimated: false,
+  }
+}
+
 /** Pull assistant text from various OpenAI-compatible shapes. */
 function extractMessageText(payload: unknown): {
   text: string
@@ -110,7 +215,7 @@ function extractMessageText(payload: unknown): {
 export async function callMimo(
   messages: MimoMessage[],
   opts: { json?: boolean; temperature?: number; maxTokens?: number } = {},
-): Promise<string> {
+): Promise<MimoResult> {
   const { apiKey, baseURL, model } = getMimoConfig()
   if (!apiKey) {
     throw new Error(
@@ -153,7 +258,13 @@ export async function callMimo(
       }
 
       const extracted = extractMessageText(payload)
-      if (extracted.text) return extracted.text
+      if (extracted.text) {
+        const fallback = estimateTokenUsage(messages, extracted.text)
+        return {
+          text: extracted.text,
+          usage: extractTokenUsage(payload, fallback),
+        }
+      }
 
       lastErr = `Empty MiMo response — ${extracted.detail}`
       // Free tier sometimes returns empty under load; retry
