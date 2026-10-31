@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  clonePdfBytes,
   deletePages,
   downloadPdfBytes,
+  ensureEditablePdf,
   extractPages,
   fetchPdfBytes,
   getPdfPageCount,
@@ -62,10 +64,18 @@ export default function PdfOrganizePanel({
     setError(null)
     void (async () => {
       try {
-        const raw =
+        let raw =
           initialBytes && initialBytes.byteLength > 0
-            ? initialBytes
+            ? clonePdfBytes(initialBytes)
             : await fetchPdfBytes(pdfSrc)
+        // Normalize stubborn PDFs (fixes PDFDict / broken /Pages catalogs).
+        // Keep result local only — do NOT onBytesChange here or parent
+        // recreates blob URL → pdfSrc changes → infinite reload loop.
+        try {
+          raw = await ensureEditablePdf(raw)
+        } catch {
+          raw = await ensureEditablePdf(await fetchPdfBytes(pdfSrc))
+        }
         const n = await getPdfPageCount(raw)
         if (cancelled) return
         setBytes(raw)

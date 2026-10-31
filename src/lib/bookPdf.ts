@@ -1,6 +1,9 @@
 import { supabase } from './supabase'
-import { cachePdfLocally, loadCachedPdf } from './pdfCache'
-import { getPdfObjectUrl, recallPdf, rememberPdf } from './pdfSession'
+import { cachePdfLocally, clearCachedPdf, loadCachedPdf } from './pdfCache'
+import { clearPdfAnnotations } from './pdfAnnotations'
+import { forgetLibraryBook } from './library'
+import { forgetPdf, getPdfObjectUrl, recallPdf, rememberPdf } from './pdfSession'
+import { clearBookProgress } from './studyProgress'
 
 const BUCKET = 'book-pdfs'
 
@@ -95,4 +98,30 @@ export async function resolveBookPdfSource(
     return null
   }
   return { url: data.signedUrl, kind: 'remote' }
+}
+
+/**
+ * Permanently delete a book: storage PDF, DB row (cascades chapters), local caches.
+ */
+export async function deleteBookComplete(bookId: string): Promise<void> {
+  if (!bookId) throw new Error('bookId gerekli')
+
+  const path = bookPdfStoragePath(bookId)
+  const { error: storageError } = await supabase.storage.from(BUCKET).remove([path])
+  if (storageError) {
+    console.warn('PDF storage delete failed', storageError)
+  }
+
+  const { error } = await supabase.from('books').delete().eq('id', bookId)
+  if (error) throw error
+
+  forgetPdf(bookId)
+  clearPdfAnnotations(bookId)
+  clearBookProgress(bookId)
+  forgetLibraryBook(bookId)
+  try {
+    await clearCachedPdf(bookId)
+  } catch (err) {
+    console.warn('local PDF cache clear failed', err)
+  }
 }

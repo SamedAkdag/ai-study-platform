@@ -52,6 +52,7 @@ import {
   exportableNotes,
 } from '@/lib/exportNotesPdf'
 import { isFlowInsert } from '@/lib/pdfInserts'
+import { geoFromPayload } from '@/lib/pdfAnnotationGeo'
 import { citationStyleLabel } from '@/lib/citations'
 import { useStudySession } from '@/hooks/useStudySession'
 import { useBookPdfUrl } from '@/hooks/useBookPdfUrl'
@@ -513,6 +514,7 @@ export default function ChapterPage() {
         page: payload.page,
         kind: m === 'omit' ? 'omit' : 'highlight',
         quote: payload.selectedText,
+        ...geoFromPayload(payload),
       })
       refreshPdfNotes()
       setCiteToast(m === 'omit' ? 'Metin gizlendi' : 'Vurgulandı')
@@ -524,6 +526,7 @@ export default function ChapterPage() {
         page: payload.page,
         kind: 'underline',
         quote: payload.selectedText,
+        ...geoFromPayload(payload),
       })
       refreshPdfNotes()
       setCiteToast('Altı çizildi')
@@ -535,6 +538,7 @@ export default function ChapterPage() {
         page: payload.page,
         kind: 'strike',
         quote: payload.selectedText,
+        ...geoFromPayload(payload),
       })
       refreshPdfNotes()
       setCiteToast('Üstü çizildi')
@@ -546,6 +550,7 @@ export default function ChapterPage() {
         page: payload.page,
         kind: 'bookmark',
         quote: payload.selectedText.slice(0, 120),
+        ...geoFromPayload(payload),
       })
       refreshPdfNotes()
       setCiteToast('Yer imi eklendi')
@@ -580,7 +585,10 @@ export default function ChapterPage() {
         )}
 
         {readStudio === 'map' && mindMap ? (
-          <section className="studio-stage studio-stage--map" aria-label="Konu haritası">
+          <section
+            className="studio-stage studio-stage--map"
+            aria-label="Konu haritası"
+          >
             <MindMapPanel
               data={mindMap}
               title={ch.title}
@@ -604,7 +612,7 @@ export default function ChapterPage() {
                 setMobilePane('pdf')
                 setReadStudio(null)
                 setCiteToast(
-                  `Haritadan: “${label.slice(0, 40)}${
+                  `Zihin haritasından: “${label.slice(0, 40)}${
                     label.length > 40 ? '…' : ''
                   }” · s. ${page}`,
                 )
@@ -634,7 +642,7 @@ export default function ChapterPage() {
         ) : null}
 
         {readStudio === 'audio' ? (
-          <section className="studio-stage" aria-label="Sesli özet">
+          <section className="studio-stage" aria-label="Podcast">
             <AudioOverviewPanel
               title={ch.title}
               summary={ch.summary}
@@ -1105,7 +1113,12 @@ export default function ChapterPage() {
       <StudyRightStudio
         showStudio={mode === 'read' && ready}
         active={readStudio}
-        onChange={setReadStudio}
+        onChange={(tab) => {
+          setReadStudio(tab)
+          if (tab === 'map' || tab === 'guide' || tab === 'audio') {
+            setMobilePane('notes')
+          }
+        }}
         hasMap={!!mindMap}
         tools={[
           {
@@ -1520,6 +1533,11 @@ export default function ChapterPage() {
 
       {hasPdf ? (
         <StudySplitPane
+          className={
+            mode === 'read' && readStudio === 'map'
+              ? 'study-split--map-focus'
+              : ''
+          }
           rightLabel={
             mode === 'read'
               ? 'Anlatım'

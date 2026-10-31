@@ -3,6 +3,111 @@ import type { PdfAnnotation } from '@/lib/pdfAnnotations'
 import type { PdfRegion } from '@/lib/pdfRegion'
 import { findQuoteAnchor } from '@/lib/pdfQuoteAnchor'
 
+/** Standalone copy — avoids SharedArrayBuffer / detached views breaking pdf-lib. */
+export function clonePdfBytes(bytes: Uint8Array): Uint8Array {
+  const out = new Uint8Array(bytes.byteLength)
+  out.set(bytes)
+  return out
+}
+
+function assertPdfMagic(bytes: Uint8Array): void {
+  if (bytes.byteLength < 5) {
+    throw new Error('PDF verisi boş veya eksik')
+  }
+  const magic =
+    String.fromCharCode(bytes[0]!, bytes[1]!, bytes[2]!, bytes[3]!, bytes[4]!)
+  if (magic !== '%PDF-') {
+    throw new Error('Dosya geçerli bir PDF değil')
+  }
+}
+
+/**
+ * Safe pdf-lib load. Always clones bytes; disables metadata mutation.
+ * Throws a clearer error than raw "Expected instance of PDFDict…".
+ */
+export async function loadPdfDoc(bytes: Uint8Array): Promise<PDFDocument> {
+  const copy = clonePdfBytes(bytes)
+  assertPdfMagic(copy)
+  try {
+    const doc = await PDFDocument.load(copy, {
+      ignoreEncryption: true,
+      updateMetadata: false,
+    })
+    // Touch page tree early — surfaces broken /Pages catalogs immediately
+    const n = doc.getPageCount()
+    if (n < 1) throw new Error('PDF’de sayfa yok')
+    return doc
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/PDFDict|undefined|Pages/i.test(msg)) {
+      throw new Error(
+        'Bu PDF pdf-lib ile açılamadı (bozuk sayfa ağacı). Kaynağı yeniden yüklemeyi dene.',
+      )
+    }
+    throw err instanceof Error ? err : new Error(msg)
+  }
+}
+
+/**
+ * Make bytes editable: round-trip through pdf-lib, or rebuild via PDF.js rasters
+ * if the catalog is broken (common "PDFDict2 / undefined" failure).
+ */
+export async function ensureEditablePdf(bytes: Uint8Array): Promise<Uint8Array> {
+  const copy = clonePdfBytes(bytes)
+  assertPdfMagic(copy)
+  try {
+    const doc = await PDFDocument.load(copy, {
+      ignoreEncryption: true,
+      updateMetadata: false,
+    })
+    doc.getPageCount()
+    return clonePdfBytes(await doc.save())
+  } catch {
+    return rebuildPdfViaRaster(copy)
+  }
+}
+
+/** Last-resort rebuild so organize / download still work on stubborn PDFs. */
+async function rebuildPdfViaRaster(bytes: Uint8Array): Promise<Uint8Array> {
+  const { pdfjsLib, ensurePdfWorker } = await import('@/lib/pdfjs')
+  await ensurePdfWorker()
+  const data = clonePdfBytes(bytes)
+  const pdf = await pdfjsLib.getDocument({ data }).promise
+  const out = await PDFDocument.create()
+  const scale = 1.5
+  try {
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i)
+      const base = page.getViewport({ scale: 1 })
+      const viewport = page.getViewport({ scale })
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.floor(viewport.width)
+      canvas.height = Math.floor(viewport.height)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('Canvas yok')
+      await page.render({ canvasContext: ctx, viewport }).promise
+      const blob = await new Promise<Blob | null>((r) =>
+        canvas.toBlob(r, 'image/jpeg', 0.92),
+      )
+      if (!blob) throw new Error('Sayfa görüntüsü oluşmadı')
+      const imgBytes = new Uint8Array(await blob.arrayBuffer())
+      const jpg = await out.embedJpg(imgBytes)
+      const p = out.addPage([base.width, base.height])
+      p.drawImage(jpg, {
+        x: 0,
+        y: 0,
+        width: base.width,
+        height: base.height,
+      })
+      canvas.width = 0
+      canvas.height = 0
+    }
+  } finally {
+    await pdf.destroy().catch(() => undefined)
+  }
+  return clonePdfBytes(await out.save())
+}
+
 /** Load PDF bytes from a viewer URL (blob: or https). */
 export async function fetchPdfBytes(src: string): Promise<Uint8Array> {
   const res = await fetch(src)
@@ -11,7 +116,7 @@ export async function fetchPdfBytes(src: string): Promise<Uint8Array> {
 }
 
 export async function getPdfPageCount(bytes: Uint8Array): Promise<number> {
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const doc = await loadPdfDoc(bytes)
   return doc.getPageCount()
 }
 
@@ -27,13 +132,13 @@ export async function extractPages(
   bytes: Uint8Array,
   pages1: number[],
 ): Promise<Uint8Array> {
-  const src = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const src = await loadPdfDoc(bytes)
   const indices = toZero(pages1).filter((i) => i < src.getPageCount())
   if (!indices.length) throw new Error('Geçerli sayfa seçilmedi')
   const out = await PDFDocument.create()
   const copied = await out.copyPages(src, indices)
   for (const p of copied) out.addPage(p)
-  return out.save()
+  return clonePdfBytes(await out.save())
 }
 
 /** Drop the given 1-based pages. */
@@ -41,14 +146,14 @@ export async function deletePages(
   bytes: Uint8Array,
   pages1: number[],
 ): Promise<Uint8Array> {
-  const src = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const src = await loadPdfDoc(bytes)
   const drop = new Set(toZero(pages1))
   const keep = src.getPageIndices().filter((i) => !drop.has(i))
   if (!keep.length) throw new Error('En az bir sayfa kalmalı')
   const out = await PDFDocument.create()
   const copied = await out.copyPages(src, keep)
   for (const p of copied) out.addPage(p)
-  return out.save()
+  return clonePdfBytes(await out.save())
 }
 
 /** Reorder to the given 1-based page sequence (must be a permutation). */
@@ -56,7 +161,7 @@ export async function reorderPages(
   bytes: Uint8Array,
   order1: number[],
 ): Promise<Uint8Array> {
-  const src = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const src = await loadPdfDoc(bytes)
   const n = src.getPageCount()
   const indices = order1.map((p) => p - 1)
   if (indices.length !== n || new Set(indices).size !== n) {
@@ -68,7 +173,7 @@ export async function reorderPages(
   const out = await PDFDocument.create()
   const copied = await out.copyPages(src, indices)
   for (const p of copied) out.addPage(p)
-  return out.save()
+  return clonePdfBytes(await out.save())
 }
 
 /** Rotate selected 1-based pages by 90 / 180 / 270 clockwise. */
@@ -77,7 +182,7 @@ export async function rotatePages(
   pages1: number[],
   angle: 90 | 180 | 270,
 ): Promise<Uint8Array> {
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const doc = await loadPdfDoc(bytes)
   const targets = new Set(toZero(pages1))
   if (!targets.size) throw new Error('Döndürülecek sayfa seç')
   const pages = doc.getPages()
@@ -87,7 +192,7 @@ export async function rotatePages(
     const cur = page.getRotation().angle
     page.setRotation(degrees((cur + angle) % 360))
   }
-  return doc.save()
+  return clonePdfBytes(await doc.save())
 }
 
 /** Append other PDF(s) after the current document. */
@@ -97,11 +202,11 @@ export async function mergePdfs(
 ): Promise<Uint8Array> {
   const out = await PDFDocument.create()
   for (const bytes of [primary, ...extras]) {
-    const src = await PDFDocument.load(bytes, { ignoreEncryption: true })
+    const src = await loadPdfDoc(bytes)
     const copied = await out.copyPages(src, src.getPageIndices())
     for (const p of copied) out.addPage(p)
   }
-  return out.save()
+  return clonePdfBytes(await out.save())
 }
 
 /** Diagonal watermark on every page (shared-copy style). */
@@ -109,9 +214,9 @@ export async function watermarkPdf(
   bytes: Uint8Array,
   text: string,
 ): Promise<Uint8Array> {
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const doc = await loadPdfDoc(bytes)
   const font = await doc.embedFont(StandardFonts.Helvetica)
-  const label = text.trim() || 'Studium'
+  const label = toWinAnsiSafe(text.trim() || 'Studium')
   for (const page of doc.getPages()) {
     const { width, height } = page.getSize()
     const size = Math.min(48, Math.max(18, width / 12))
@@ -125,7 +230,7 @@ export async function watermarkPdf(
       rotate: degrees(32),
     })
   }
-  return doc.save()
+  return clonePdfBytes(await doc.save())
 }
 
 export function pdfBytesToBlob(bytes: Uint8Array): Blob {
@@ -171,7 +276,7 @@ export async function burnTextEdits(
   )
   if (!actionable.length) throw new Error('Basılacak değiştir / sansür yok')
 
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const doc = await loadPdfDoc(bytes)
   const fontCache = new Map<
     StandardFonts,
     Awaited<ReturnType<typeof doc.embedFont>>
@@ -259,7 +364,7 @@ export async function burnTextEdits(
     })
   }
 
-  return doc.save()
+  return clonePdfBytes(await doc.save())
 }
 
 function clamp(n: number, lo: number, hi: number) {
@@ -311,7 +416,7 @@ export async function insertStyledTextBlock(
   if (!raw) throw new Error('Eklenecek metin yok')
   const text = toWinAnsiSafe(raw)
 
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const doc = await loadPdfDoc(bytes)
   const pages = doc.getPages()
   const pageIndex = Math.max(0, Math.min(pages.length - 1, input.page - 1))
   const page = pages[pageIndex]
@@ -368,7 +473,7 @@ export async function insertStyledTextBlock(
     lineHeight: size * 1.28,
   })
 
-  return doc.save()
+  return clonePdfBytes(await doc.save())
 }
 
 function pickStandardFont(

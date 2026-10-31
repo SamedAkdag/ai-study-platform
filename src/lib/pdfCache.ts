@@ -83,3 +83,17 @@ export async function loadCachedPageTexts(
   db.close()
   return pages
 }
+
+/** Drop local PDF + page-text cache for a book (after delete). */
+export async function clearCachedPdf(bookId: string): Promise<void> {
+  if (!bookId) return
+  const db = await openDb()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([STORE_FILES, STORE_PAGES], 'readwrite')
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB clear failed'))
+    tx.objectStore(STORE_FILES).delete(bookId)
+    tx.objectStore(STORE_PAGES).delete(bookId)
+  })
+  db.close()
+}

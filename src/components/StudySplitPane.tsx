@@ -7,11 +7,12 @@ import {
 } from 'react'
 
 const STORAGE_KEY = 'studium.splitPdfRatio'
-const DEFAULT_RATIO = 0.5
+/** PDF-first default — notes rail is secondary. */
+const DEFAULT_RATIO = 0.6
 const PRESETS = [
-  { id: '40', ratio: 0.4, label: '40' },
-  { id: '50', ratio: 0.5, label: '50' },
+  { id: '55', ratio: 0.55, label: '55' },
   { id: '60', ratio: 0.6, label: '60' },
+  { id: '68', ratio: 0.68, label: '68' },
 ] as const
 
 type Props = {
@@ -110,11 +111,10 @@ export default function StudySplitPane({
         </div>
 
         <div
-          className="study-split__presets hidden md:flex"
+          className="study-split__presets study-split__presets--quiet hidden md:flex"
           role="group"
-          aria-label="PDF oranı"
+          aria-label="PDF genişliği"
         >
-          <span className="study-split__presets-label">Düzen</span>
           {PRESETS.map((p) => (
             <button
               key={p.id}
@@ -123,9 +123,10 @@ export default function StudySplitPane({
                 activePreset?.id === p.id ? ' is-active' : ''
               }`}
               aria-pressed={activePreset?.id === p.id}
+              aria-label={`PDF %${p.label}`}
               onClick={() => persist(p.ratio)}
             >
-              {p.label}/{100 - Number(p.label)}
+              {p.label}
             </button>
           ))}
         </div>

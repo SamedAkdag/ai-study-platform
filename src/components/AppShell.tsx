@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import StudyTimerBadge from '@/components/StudyTimerBadge'
+import ThemePicker from '@/components/ThemePicker'
 import AuthButton from '@/components/AuthButton'
 import NotificationBell from '@/components/NotificationBell'
 import ProductTour from '@/components/ProductTour'
@@ -72,6 +73,7 @@ export default function AppShell({
         </div>
         <nav className="flex flex-wrap items-center gap-0.5">
           <StudyTimerBadge bookId={bookId} showBook={showBookTimer} />
+          <ThemePicker />
           <NotificationBell />
           {user && (
             <div className="relative" ref={menuRef}>
@@ -90,6 +92,20 @@ export default function AppShell({
                     onClick={() => setMenuOpen(false)}
                   >
                     Kitaplık
+                  </Link>
+                  <Link
+                    to="/notes"
+                    className="block rounded-lg px-2.5 py-2 text-xs"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Notlarım
+                  </Link>
+                  <Link
+                    to="/review"
+                    className="block rounded-lg px-2.5 py-2 text-xs"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    Tekrar planı
                   </Link>
                   <Link
                     to="/stats"

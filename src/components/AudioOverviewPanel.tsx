@@ -5,7 +5,6 @@ import {
   generateAudioOverview,
   loadCachedAudioOverview,
   type AudioOverviewScript,
-  type OverviewTurn,
 } from '@/lib/audioOverview'
 import {
   getStoredLang,
@@ -18,6 +17,7 @@ import {
   type TtsStatus,
 } from '@/lib/tts'
 import { friendlyAiError } from '@/lib/errors'
+import EmaTts from '@/components/EmaTts'
 
 type Props = {
   title: string
@@ -27,7 +27,12 @@ type Props = {
   defaultOpen?: boolean
 }
 
-/** NotebookLM-style Audio Overview: AI dialogue script + browser TTS. */
+function estimateListenMinutes(narration: string): number {
+  const chars = narration.replace(/\s+/g, ' ').trim().length
+  return Math.max(1, Math.round(chars / 14 / 60))
+}
+
+/** Continuous teacher lecture + TTS. */
 export default function AudioOverviewPanel({
   title,
   summary,
@@ -55,15 +60,15 @@ export default function AudioOverviewPanel({
 
   const [script, setScript] = useState<AudioOverviewScript>(() => {
     const cached = loadCachedAudioOverview(inputKey)
-    return cached && cached.turns.length >= 4 ? cached : fallback
+    return cached && cached.narration.length >= 120 ? cached : fallback
   })
 
   useEffect(() => {
     const cached = loadCachedAudioOverview(inputKey)
-    setScript(cached && cached.turns.length >= 4 ? cached : fallback)
+    setScript(cached && cached.narration.length >= 120 ? cached : fallback)
     setTurnIndex(0)
     stop()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when unit content changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when unit changes
   }, [title, summary, markdown, fallback])
 
   const genMutation = useMutation({
@@ -76,10 +81,9 @@ export default function AudioOverviewPanel({
   })
 
   const autoTriedKey = useRef('')
-  // Auto-generate AI script once when panel opens (if not already AI-cached)
   useEffect(() => {
     if (!open) return
-    if (script.source === 'ai' && script.turns.length >= 6) return
+    if (script.source === 'ai' && script.narration.length >= 400) return
     if (genMutation.isPending) return
     const key = `${title}::${(markdown || '').slice(0, 80)}`
     if (autoTriedKey.current === key) return
@@ -95,7 +99,7 @@ export default function AudioOverviewPanel({
     }
   }, [])
 
-  function hostVoice(host: OverviewTurn['host']): string | undefined {
+  function teacherVoice(): string | undefined {
     const voices = listVoices()
     const lang = getStoredLang()
     const pool = voices.filter((v) =>
@@ -103,11 +107,7 @@ export default function AudioOverviewPanel({
         .toLowerCase()
         .startsWith(lang.split(/[-_]/)[0]!.toLowerCase()),
     )
-    if (pool.length >= 2) {
-      return host === 'A' ? pool[0]?.voiceURI : pool[1]?.voiceURI
-    }
-    const picked = pickVoice(voices, undefined, lang)
-    return picked?.voiceURI
+    return pool[0]?.voiceURI ?? pickVoice(voices, undefined, lang)?.voiceURI
   }
 
   function playFrom(startAt: number) {
@@ -123,12 +123,11 @@ export default function AudioOverviewPanel({
         setStatus('idle')
         return
       }
-      const turn = turns[i]!
       setTurnIndex(i)
-      speakText(turn.text, {
-        rate: getStoredRate() * (turn.host === 'B' ? 1.02 : 0.98),
+      speakText(turns[i]!.text, {
+        rate: getStoredRate() * 0.96,
         lang: getStoredLang(),
-        voiceUri: hostVoice(turn.host),
+        voiceUri: teacherVoice(),
         onStatus: setStatus,
         onEnd: () => {
           if (cancelRef.current) return
@@ -152,11 +151,15 @@ export default function AudioOverviewPanel({
     setStatus('idle')
   }
 
-  const active = script.turns[turnIndex]
   const isAi = script.source === 'ai'
+  const mins = estimateListenMinutes(script.narration)
+  const paragraphs = script.narration
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
 
   return (
-    <section className="studio-panel studio-panel--audio" aria-label="Sesli özet">
+    <section className="studio-panel studio-panel--audio" aria-label="Dinle">
       <button
         type="button"
         className="studio-panel__toggle"
@@ -164,8 +167,8 @@ export default function AudioOverviewPanel({
         onClick={() => setOpen((v) => !v)}
       >
         <div>
-          <p className="section-label mb-0.5">Sesli özet</p>
-          <p className="studio-panel__title">Ada & Barış · podcast sohbet</p>
+          <p className="section-label mb-0.5">Dinle</p>
+          <p className="studio-panel__title">Hoca · ders anlatımı</p>
         </div>
         <span className="studio-panel__chev">{open ? 'Gizle' : 'Aç'}</span>
       </button>
@@ -173,10 +176,11 @@ export default function AudioOverviewPanel({
       {open ? (
         <div className="studio-panel__body">
           <p className="muted text-sm leading-relaxed">
-            İki sunucu ünitenin omurgasını konuşuyor.
+            Tek bir akış: tahta başındaki öğretmen gibi konuşuyor — özet değil,
+            ders. Okuyabilir veya baştan sona dinleyebilirsin.
             {isAi
-              ? ' Senaryo AI ile üretildi; ses tarayıcı TTS.'
-              : ' Geçici taslak gösteriliyor; AI senaryo hazırlanıyor veya yenilenebilir.'}
+              ? ' Metin AI ile üretildi; ses tarayıcı TTS.'
+              : ' Geçici taslak gösteriliyor; AI dersi hazırlanıyor veya yenilenebilir.'}
           </p>
 
           <div className="audio-overview__actions">
@@ -190,10 +194,10 @@ export default function AudioOverviewPanel({
               <button
                 type="button"
                 className="btn-primary text-sm"
-                disabled={script.turns.length === 0 || genMutation.isPending}
+                disabled={!script.narration || genMutation.isPending}
                 onClick={() => playFrom(0)}
               >
-                Dinle
+                Dersi dinle
               </button>
             )}
             {!playing && turnIndex > 0 ? (
@@ -211,40 +215,51 @@ export default function AudioOverviewPanel({
               disabled={genMutation.isPending || playing}
               onClick={() => genMutation.mutate(true)}
             >
-              {genMutation.isPending ? 'Senaryo yazılıyor…' : 'Senaryoyu yenile'}
+              {genMutation.isPending ? 'Yazılıyor…' : 'Dersi yenile'}
             </button>
           </div>
 
           {genMutation.isPending ? (
-            <p className="muted text-xs">Ada & Barış için diyalog yazılıyor…</p>
+            <p className="muted text-xs">Hoca anlatımı yazılıyor…</p>
           ) : null}
           {genMutation.isError ? (
             <p className="audio-overview__error text-xs" role="alert">
-              {friendlyAiError(genMutation.error)} — taslak senaryo dinlenebilir.
+              {friendlyAiError(genMutation.error)} — taslak dinlenebilir.
             </p>
           ) : null}
-          {isAi && !genMutation.isPending ? (
-            <p className="muted text-[11px]">AI senaryo · {script.turns.length} tur</p>
+          {!genMutation.isPending ? (
+            <p className="muted text-[11px]">
+              {isAi ? 'AI · ' : 'Taslak · '}
+              Ders anlatımı · ~{mins} dk
+              {playing ? ' · dinleniyor' : ''}
+            </p>
           ) : null}
 
-          <ol className="audio-overview__script">
-            {script.turns.map((t, i) => (
-              <li
-                key={`${t.host}-${i}-${t.text.slice(0, 24)}`}
-                className={`audio-overview__turn ${
-                  playing && i === turnIndex ? 'is-active' : ''
-                } host-${t.host.toLowerCase()}`}
-              >
-                <span className="audio-overview__host">{t.name}</span>
-                <p>{t.text}</p>
-              </li>
-            ))}
-          </ol>
+          <article
+            className={`audio-overview__lecture${playing ? ' is-playing' : ''}`}
+            aria-label="Ders anlatımı"
+          >
+            <header className="audio-overview__lecture-head">
+              <p className="section-label mb-0.5">Hoca konuşuyor</p>
+              <h2 className="audio-overview__blog-title">{script.title}</h2>
+            </header>
+            <div className="audio-overview__lecture-body">
+              {paragraphs.map((p, i) => (
+                <p key={`${i}-${p.slice(0, 24)}`}>{p}</p>
+              ))}
+            </div>
+          </article>
 
-          {playing && active ? (
-            <p className="audio-overview__now muted text-xs">
-              Şimdi: {active.name}
-            </p>
+          {script.narration.trim().length > 40 ? (
+            <div className="audio-overview__ema">
+              <p className="section-label mb-1">Ses dosyası indir</p>
+              <EmaTts
+                compact
+                preload={false}
+                title={script.title || title || 'ders'}
+                initialText={script.narration}
+              />
+            </div>
           ) : null}
         </div>
       ) : null}

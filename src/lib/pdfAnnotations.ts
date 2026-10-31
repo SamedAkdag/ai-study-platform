@@ -35,8 +35,10 @@ export type PdfAnnotation = {
   anchorLeftPct?: number
   /** Sampled from selection so insert body matches PDF typography */
   textStyle?: PdfTextStyle
-  /** Page box for burn-in (replace / redact) */
+  /** Page box for burn-in (replace / redact) / single highlight */
   region?: PdfRegion
+  /** Per-line highlight bands — covers the full sentence without one tall box */
+  regions?: PdfRegion[]
   createdAt: string
 }
 
@@ -63,6 +65,14 @@ export function savePdfAnnotations(
     localStorage.setItem(key(bookId), JSON.stringify(items.slice(0, 400)))
   } catch {
     /* quota */
+  }
+}
+
+export function clearPdfAnnotations(bookId: string): void {
+  try {
+    localStorage.removeItem(key(bookId))
+  } catch {
+    /* ignore */
   }
 }
 
@@ -97,6 +107,7 @@ export function updatePdfAnnotation(
       | 'anchorLeftPct'
       | 'textStyle'
       | 'region'
+      | 'regions'
     >
   >,
 ): PdfAnnotation[] {

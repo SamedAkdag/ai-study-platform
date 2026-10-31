@@ -13,6 +13,8 @@ const SharedChapterPage = lazy(() => import('@/pages/SharedChapterPage'))
 const JoinInvitePage = lazy(() => import('@/pages/JoinInvitePage'))
 const SocialPage = lazy(() => import('@/pages/SocialPage'))
 const StatsPage = lazy(() => import('@/pages/StatsPage'))
+const NotesPage = lazy(() => import('@/pages/NotesPage'))
+const ReviewPage = lazy(() => import('@/pages/ReviewPage'))
 
 const queryClient = new QueryClient()
 
@@ -32,6 +34,8 @@ export default function App() {
           <Suspense fallback={<RouteFallback />}>
             <Routes>
               <Route path="/" element={<UploadPage />} />
+              <Route path="/notes" element={<NotesPage />} />
+              <Route path="/review" element={<ReviewPage />} />
               <Route path="/processing/:bookId" element={<ProcessingPage />} />
               <Route path="/books/:bookId" element={<BookPage />} />
               <Route path="/books/:bookId/read" element={<BookReadPage />} />

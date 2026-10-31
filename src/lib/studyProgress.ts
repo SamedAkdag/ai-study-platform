@@ -32,6 +32,13 @@ export function getBookProgress(bookId: string): Record<string, ChapterProgress>
   return readStore()[bookId] ?? {}
 }
 
+export function clearBookProgress(bookId: string) {
+  const store = readStore()
+  if (!(bookId in store)) return
+  delete store[bookId]
+  writeStore(store)
+}
+
 export function markChapterOpened(bookId: string, chapterId: string) {
   const store = readStore()
   const book = store[bookId] ?? {}

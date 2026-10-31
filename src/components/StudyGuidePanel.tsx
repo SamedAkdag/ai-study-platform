@@ -8,6 +8,7 @@ import {
 } from '@/lib/studyGuide'
 import type { QuizItem } from '@/types/database'
 import { friendlyAiError } from '@/lib/errors'
+import StudyMarkdown from '@/components/StudyMarkdown'
 
 type Props = {
   title: string
@@ -105,7 +106,9 @@ export default function StudyGuidePanel({
 
           <div className="studio-block">
             <p className="studio-block__label">Brifing</p>
-            <p className="studio-block__text">{guide.briefing}</p>
+            <div className="studio-block__md">
+              <StudyMarkdown markdown={guide.briefing} compact />
+            </div>
           </div>
 
           {guide.keyTerms.length > 0 ? (

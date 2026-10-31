@@ -13,13 +13,72 @@ export type LibraryItem = {
   addedAt: string
 }
 
+/** Canonical ders/alan values stored on books.subject */
+export const SUBJECT_OPTIONS = [
+  { value: 'Math', label: 'Matematik', tone: 'tone-math' },
+  { value: 'Physics', label: 'Fizik', tone: 'tone-phys' },
+  { value: 'History', label: 'Tarih', tone: 'tone-hist' },
+  { value: 'Law', label: 'Hukuk / Maliye', tone: 'tone-law' },
+  { value: 'Other', label: 'Diğer', tone: 'tone-default' },
+] as const
+
+export type SubjectValue = (typeof SUBJECT_OPTIONS)[number]['value']
+
+export function normalizeSubjectKey(
+  subject: string | null | undefined,
+): SubjectValue {
+  const s = (subject || '').trim().toLowerCase()
+  if (!s) return 'Other'
+  if (s.includes('math') || s.includes('matematik')) return 'Math'
+  if (s.includes('phys') || s.includes('fizik')) return 'Physics'
+  if (s.includes('hist') || s.includes('tarih')) return 'History'
+  if (s.includes('law') || s.includes('hukuk') || s.includes('maliye'))
+    return 'Law'
+  if (s === 'other' || s.includes('diğer') || s.includes('diger')) return 'Other'
+  return 'Other'
+}
+
+export function subjectLabel(subject: string | null | undefined): string {
+  const key = normalizeSubjectKey(subject)
+  return SUBJECT_OPTIONS.find((o) => o.value === key)?.label ?? 'Diğer'
+}
+
+export function subjectToneClass(subject: string | null | undefined): string {
+  const key = normalizeSubjectKey(subject)
+  return SUBJECT_OPTIONS.find((o) => o.value === key)?.tone ?? 'tone-default'
+}
+
+export type SubjectShelfGroup = {
+  key: SubjectValue
+  label: string
+  items: LibraryItem[]
+}
+
+/** Group library items by ders — empty subjects → Diğer. */
+export function groupLibraryBySubject(
+  items: LibraryItem[],
+): SubjectShelfGroup[] {
+  const buckets = new Map<SubjectValue, LibraryItem[]>()
+  for (const opt of SUBJECT_OPTIONS) buckets.set(opt.value, [])
+  for (const item of items) {
+    const key = normalizeSubjectKey(item.subject)
+    buckets.get(key)!.push(item)
+  }
+  return SUBJECT_OPTIONS.map((opt) => ({
+    key: opt.value,
+    label: opt.label,
+    items: buckets.get(opt.value) ?? [],
+  })).filter((g) => g.items.length > 0)
+}
+
 const LOCAL_KEY = 'studium_library_v1'
 
 type LocalEntry = {
   bookId: string
   title: string
+  subject?: string | null
   shareToken: string | null
-  source: 'shared' | 'group'
+  source: 'mine' | 'shared' | 'group'
   addedAt: string
 }
 
@@ -42,17 +101,19 @@ function writeLocal(entries: LocalEntry[]) {
   }
 }
 
-/** Persist a shared/group book so it stays in the home shelf. */
+/** Persist a book on this device shelf (guest mine + shared/group pins). */
 export function rememberLibraryBook(input: {
   bookId: string
   title: string
+  subject?: string | null
   shareToken?: string | null
-  source: 'shared' | 'group'
+  source: 'mine' | 'shared' | 'group'
 }) {
   const entries = readLocal().filter((e) => e.bookId !== input.bookId)
   entries.unshift({
     bookId: input.bookId,
     title: input.title,
+    subject: input.subject ?? null,
     shareToken: input.shareToken ?? null,
     source: input.source,
     addedAt: new Date().toISOString(),
@@ -268,23 +329,26 @@ export async function fetchMyLibrary(userId?: string | null): Promise<LibraryIte
     }
   }
 
-  // 5) Local remembered entries (fallback)
+  // 5) Local remembered entries (guest uploads + shared/group pins)
   const hidden = getHiddenLibraryIds()
   for (const e of readLocal()) {
     if (byId.has(e.bookId) || hidden.has(e.bookId)) continue
+    const source = e.source === 'mine' || e.source === 'shared' || e.source === 'group'
+      ? e.source
+      : 'shared'
     byId.set(e.bookId, {
       bookId: e.bookId,
       title: e.title,
-      subject: null,
+      subject: e.subject ?? null,
       status: 'ready',
       shareToken: e.shareToken,
       isPublic: !!e.shareToken,
-      source: e.source,
+      source,
       href: libraryHref({
         bookId: e.bookId,
         shareToken: e.shareToken,
         isPublic: !!e.shareToken,
-        source: e.source,
+        source,
       }),
       addedAt: e.addedAt,
     })

@@ -13,7 +13,21 @@ export type PageSegment =
   | { type: 'band'; key: string; srcTop: number; height: number }
   | { type: 'insert'; key: string; insert: PageInsert }
 
-/** Annotations that become in-flow book inserts (not mere highlights). */
+/** Short notes / bookmarks sit in the side margin — never cover book text. */
+export const SHORT_NOTE_CHARS = 140
+
+export function isMarginNote(a: PdfAnnotation): boolean {
+  if (a.kind === 'bookmark') return true
+  if (a.kind !== 'note') return false
+  const body = (a.body || '').trim()
+  if (!body) return true
+  return body.length <= SHORT_NOTE_CHARS
+}
+
+/**
+ * In-flow inserts open vertical space (AI + long notes).
+ * Short notes / bookmarks use the margin rail instead — never overlay body text.
+ */
 export function isFlowInsert(a: PdfAnnotation): boolean {
   if (
     a.kind === 'highlight' ||
@@ -26,7 +40,8 @@ export function isFlowInsert(a: PdfAnnotation): boolean {
   ) {
     return false
   }
-  return !!(a.body && a.body.trim()) || a.kind === 'note' || a.kind === 'ai'
+  if (isMarginNote(a)) return false
+  return !!(a.body && a.body.trim())
 }
 
 export function resolveInsertY(

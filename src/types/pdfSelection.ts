@@ -10,6 +10,8 @@ export type PdfSelectionPayload = {
   textStyle?: PdfTextStyle
   /** Selection box on the page (for PDF-style AI insert). */
   region?: PdfRegion
+  /** Per-line boxes for continuous highlight (full sentence coverage). */
+  regions?: PdfRegion[]
   paperColor?: string
   /**
    * `region` = marquee over a chart/figure (vision).

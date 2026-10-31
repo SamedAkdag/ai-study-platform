@@ -2,13 +2,6 @@ import {
   PDFDocument,
   rgb,
   StandardFonts,
-  pushGraphicsState,
-  popGraphicsState,
-  moveTo,
-  lineTo,
-  closePath,
-  clip,
-  endPath,
   type PDFFont,
   type PDFPage,
   type PDFEmbeddedPage,
@@ -21,19 +14,93 @@ import {
 import {
   buildPageSegments,
   isFlowInsert,
+  isMarginNote,
   type PageInsert,
 } from '@/lib/pdfInserts'
-import { downloadPdfBytes, toWinAnsiSafe } from '@/lib/pdfManipulate'
+import {
+  clonePdfBytes,
+  downloadPdfBytes,
+  ensureEditablePdf,
+  loadPdfDoc,
+  toWinAnsiSafe,
+} from '@/lib/pdfManipulate'
+import type { PdfRegion } from '@/lib/pdfRegion'
+import { getExportPalette, type RgbTuple } from '@/lib/moodTheme'
 
-const TEAL = rgb(0.059, 0.463, 0.431)
-const TEAL_DEEP = rgb(0.043, 0.353, 0.329)
-const INK = rgb(0.086, 0.145, 0.196)
-const MUTED = rgb(0.353, 0.427, 0.486)
-const CARD_BG = rgb(0.965, 0.98, 0.976)
-const TABLE_HEAD = rgb(0.894, 0.953, 0.945)
-const TABLE_ALT = rgb(0.95, 0.976, 0.973)
-const ROW_BG = rgb(1, 1, 1)
-const RULE = rgb(0.55, 0.72, 0.7)
+function toPdfRgb(t: RgbTuple) {
+  return rgb(t[0], t[1], t[2])
+}
+
+/** Theme-tinted colors for inserts baked onto (usually white) book pages. */
+function insertInkPalette() {
+  const p = getExportPalette()
+  // Always keep body ink dark enough for white PDF pages.
+  const darkInk: RgbTuple =
+    p.themeId === 'night'
+      ? [0.1, 0.17, 0.14]
+      : p.inkRgb[0] + p.inkRgb[1] + p.inkRgb[2] > 1.8
+        ? [0.1, 0.17, 0.14]
+        : p.inkRgb
+  const accent =
+    p.themeId === 'night'
+      ? ([0.24, 0.42, 0.33] as RgbTuple)
+      : p.accentRgb
+  const accentDeep =
+    p.themeId === 'night'
+      ? ([0.14, 0.23, 0.17] as RgbTuple)
+      : p.accentDeepRgb[0] + p.accentDeepRgb[1] + p.accentDeepRgb[2] > 1.6
+        ? accent
+        : p.accentDeepRgb
+  const soft =
+    p.themeId === 'night'
+      ? ([0.84, 0.9, 0.87] as RgbTuple)
+      : p.accentSoftRgb
+  return {
+    TEAL: toPdfRgb(accent),
+    TEAL_DEEP: toPdfRgb(accentDeep),
+    INK: toPdfRgb(darkInk),
+    MUTED: toPdfRgb(
+      p.themeId === 'night' ? ([0.35, 0.42, 0.39] as RgbTuple) : p.inkMutedRgb,
+    ),
+    CARD_BG: toPdfRgb(soft),
+    TABLE_HEAD: toPdfRgb(soft),
+    TABLE_ALT: toPdfRgb([
+      (soft[0] + 1) / 2,
+      (soft[1] + 1) / 2,
+      (soft[2] + 1) / 2,
+    ]),
+    ROW_BG: rgb(1, 1, 1),
+    RULE: toPdfRgb([
+      (accent[0] + 0.55) / 2,
+      (accent[1] + 0.72) / 2,
+      (accent[2] + 0.7) / 2,
+    ]),
+  }
+}
+
+/** Live theme colors — refreshed at each export entry. */
+let TEAL = rgb(0.176, 0.275, 0.208)
+let TEAL_DEEP = rgb(0.141, 0.227, 0.173)
+let INK = rgb(0.102, 0.169, 0.141)
+let MUTED = rgb(0.353, 0.42, 0.388)
+let CARD_BG = rgb(0.902, 0.937, 0.918)
+let TABLE_HEAD = CARD_BG
+let TABLE_ALT = rgb(0.95, 0.976, 0.973)
+let ROW_BG = rgb(1, 1, 1)
+let RULE = rgb(0.55, 0.72, 0.7)
+
+function refreshInsertColors() {
+  const c = insertInkPalette()
+  TEAL = c.TEAL
+  TEAL_DEEP = c.TEAL_DEEP
+  INK = c.INK
+  MUTED = c.MUTED
+  CARD_BG = c.CARD_BG
+  TABLE_HEAD = c.TABLE_HEAD
+  TABLE_ALT = c.TABLE_ALT
+  ROW_BG = c.ROW_BG
+  RULE = c.RULE
+}
 
 type Align = 'left' | 'center' | 'right'
 
@@ -50,9 +117,29 @@ type Fonts = {
   italic: PDFFont
 }
 
+const MARKUP_KINDS = new Set([
+  'highlight',
+  'underline',
+  'strike',
+  'omit',
+  'bookmark',
+])
+
+function isPageMarkup(a: PdfAnnotation): boolean {
+  return (
+    MARKUP_KINDS.has(a.kind) &&
+    !!(a.region || (a.regions && a.regions.length))
+  )
+}
+
+function markupBoxes(a: PdfAnnotation): PdfRegion[] {
+  if (a.regions && a.regions.length) return a.regions
+  return a.region ? [a.region] : []
+}
+
 /**
- * Download the book PDF with AI / note inserts baked in place as real PDF
- * text and tables (vector — original pages stay selectable, not PNG).
+ * Download the book PDF with highlights / underlines / etc. burned onto pages
+ * and AI / note inserts baked in place as real PDF text (vector).
  */
 export async function downloadPdfWithInserts(input: {
   pdfBytes: Uint8Array
@@ -60,41 +147,66 @@ export async function downloadPdfWithInserts(input: {
   filename: string
   onProgress?: (msg: string) => void
 }): Promise<void> {
+  refreshInsertColors()
   const { pdfBytes, annotations, filename, onProgress } = input
   const inserts = annotations.filter(
     (a) => isFlowInsert(a) && !!(a.body && a.body.trim()),
   )
+  const markups = annotations.filter(isPageMarkup)
+  const margins = annotations.filter(isMarginNote)
 
-  if (!inserts.length) {
-    downloadPdfBytes(pdfBytes, filename)
+  onProgress?.('İşaretler uygulanıyor…')
+  let srcBytes = await ensureEditablePdf(pdfBytes)
+  if (markups.length) {
+    srcBytes = await bakePageMarkups(srcBytes, markups, onProgress)
+  }
+
+  const hasSideNotes = margins.length > 0
+  if (!inserts.length && !hasSideNotes) {
+    downloadPdfBytes(
+      srcBytes,
+      filename.endsWith('.pdf') ? filename : `${filename}.pdf`,
+    )
     return
   }
 
-  const srcDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true })
+  // Separate loads: mixing copyPages + embedPage on one doc often throws PDFDict errors.
+  const srcForCopy = await loadPdfDoc(srcBytes)
   const out = await PDFDocument.create()
   const fonts: Fonts = {
     regular: await out.embedFont(StandardFonts.Helvetica),
     bold: await out.embedFont(StandardFonts.HelveticaBold),
     italic: await out.embedFont(StandardFonts.HelveticaOblique),
   }
-  const n = srcDoc.getPageCount()
+  const n = srcForCopy.getPageCount()
 
-  const byPage = new Map<number, PdfAnnotation[]>()
+  const insertsByPage = new Map<number, PdfAnnotation[]>()
   for (const a of inserts) {
-    const list = byPage.get(a.page) || []
+    const list = insertsByPage.get(a.page) || []
     list.push(a)
-    byPage.set(a.page, list)
+    insertsByPage.set(a.page, list)
+  }
+  const marginsByPage = new Map<number, PdfAnnotation[]>()
+  for (const a of margins) {
+    const list = marginsByPage.get(a.page) || []
+    list.push(a)
+    marginsByPage.set(a.page, list)
   }
 
   for (let i = 0; i < n; i++) {
     onProgress?.(`Sayfa ${i + 1} / ${n}…`)
-    const pageInserts = byPage.get(i + 1)
-    if (!pageInserts?.length) {
-      const [copied] = await out.copyPages(srcDoc, [i])
+    const pageInserts = insertsByPage.get(i + 1) || []
+    const pageMargins = marginsByPage.get(i + 1) || []
+    if (!pageInserts.length && !pageMargins.length) {
+      const [copied] = await out.copyPages(srcForCopy, [i])
       out.addPage(copied)
       continue
     }
-    await composeVectorPage(out, srcDoc, i, pageInserts, fonts)
+    if (!pageInserts.length && pageMargins.length) {
+      await copyPageWithMarginRail(out, srcForCopy, i, pageMargins, fonts)
+      continue
+    }
+    await composeVectorPage(out, srcBytes, i, pageInserts, fonts, pageMargins)
   }
 
   const bytes = await out.save()
@@ -104,20 +216,246 @@ export async function downloadPdfWithInserts(input: {
   )
 }
 
-async function composeVectorPage(
+const MARGIN_RAIL = 148
+
+async function copyPageWithMarginRail(
   out: PDFDocument,
   srcDoc: PDFDocument,
   pageIndex: number,
-  annotations: PdfAnnotation[],
+  margins: PdfAnnotation[],
   fonts: Fonts,
 ): Promise<void> {
   const srcPage = srcDoc.getPages()[pageIndex]
   if (!srcPage) return
   const { width, height } = srcPage.getSize()
   const embedded = await out.embedPage(srcPage)
+  const page = out.addPage([width + MARGIN_RAIL, height])
+  page.drawPage(embedded, { x: 0, y: 0, width, height })
+  drawMarginNotes(page, margins, fonts, {
+    contentWidth: width,
+    contentHeight: height,
+    pageHeight: height,
+    yShift: () => 0,
+  })
+}
+
+function drawMarginNotes(
+  page: PDFPage,
+  notes: PdfAnnotation[],
+  fonts: Fonts,
+  opts: {
+    contentWidth: number
+    contentHeight: number
+    pageHeight: number
+    yShift: (pageYFromTop: number) => number
+  },
+) {
+  const railX = opts.contentWidth + 6
+  const railW = MARGIN_RAIL - 14
+  const size = 7.2
+  const lineH = 9.2
+
+  for (const a of notes) {
+    const y0 =
+      (typeof a.anchorTopPct === 'number'
+        ? a.anchorTopPct
+        : a.region?.topPct ?? 0.4) * opts.contentHeight
+    const topFromTop = y0 + opts.yShift(y0)
+    const label = a.kind === 'bookmark' ? 'Yer imi' : 'Not'
+    const raw = (a.body || '').trim() || a.quote
+    const body = toWinAnsiSafe(raw).slice(0, 220)
+    const lines = wrapText(body, fonts.regular, size, railW)
+    const boxH = 12 + lines.length * lineH + 8
+    const topY = opts.pageHeight - topFromTop
+    const boxBottom = Math.max(8, topY - boxH)
+
+    page.drawRectangle({
+      x: railX,
+      y: boxBottom,
+      width: railW,
+      height: boxH,
+      color: CARD_BG,
+      borderColor: RULE,
+      borderWidth: 0.6,
+    })
+    page.drawRectangle({
+      x: railX,
+      y: boxBottom,
+      width: 2.5,
+      height: boxH,
+      color: TEAL,
+    })
+    page.drawText(toWinAnsiSafe(label), {
+      x: railX + 7,
+      y: boxBottom + boxH - 11,
+      size: 6.5,
+      font: fonts.bold,
+      color: TEAL_DEEP,
+    })
+    let ty = boxBottom + boxH - 22
+    for (const line of lines.slice(0, 12)) {
+      page.drawText(line, {
+        x: railX + 7,
+        y: ty,
+        size,
+        font: fonts.regular,
+        color: INK,
+      })
+      ty -= lineH
+    }
+  }
+}
+
+/** Burn highlight / underline / strike / omit / bookmark regions onto page content. */
+async function bakePageMarkups(
+  pdfBytes: Uint8Array,
+  markups: PdfAnnotation[],
+  onProgress?: (msg: string) => void,
+): Promise<Uint8Array> {
+  refreshInsertColors()
+  const doc = await loadPdfDoc(pdfBytes)
+  const pages = doc.getPages()
+  const byPage = new Map<number, PdfAnnotation[]>()
+  for (const a of markups) {
+    const list = byPage.get(a.page) || []
+    list.push(a)
+    byPage.set(a.page, list)
+  }
+
+  for (const [pageNum, list] of byPage) {
+    const page = pages[pageNum - 1]
+    if (!page) continue
+    onProgress?.(`Vurgu / işaret · s. ${pageNum}…`)
+    const { width, height } = page.getSize()
+    for (const a of list) {
+      for (const box of markupBoxes(a)) {
+        drawMarkupBox(page, a.kind, box, width, height)
+      }
+    }
+  }
+
+  return clonePdfBytes(await doc.save())
+}
+
+function drawMarkupBox(
+  page: PDFPage,
+  kind: PdfAnnotation['kind'],
+  r: PdfRegion,
+  pageWidth: number,
+  pageHeight: number,
+) {
+  const x = r.leftPct * pageWidth
+  const w = Math.max(2, r.widthPct * pageWidth)
+  const h = Math.max(2, r.heightPct * pageHeight)
+  const y = pageHeight - r.topPct * pageHeight - h
+
+  if (kind === 'highlight') {
+    page.drawRectangle({
+      x,
+      y,
+      width: w,
+      height: h,
+      color: rgb(0.96, 0.82, 0.4),
+      opacity: 0.42,
+    })
+    return
+  }
+  if (kind === 'underline') {
+    page.drawRectangle({
+      x,
+      y: y + 1,
+      width: w,
+      height: 1.75,
+      color: TEAL,
+      opacity: 0.92,
+    })
+    return
+  }
+  if (kind === 'strike') {
+    page.drawRectangle({
+      x,
+      y: y + h * 0.45,
+      width: w,
+      height: 1.6,
+      color: rgb(0.72, 0.11, 0.11),
+      opacity: 0.88,
+    })
+    return
+  }
+  if (kind === 'omit') {
+    page.drawRectangle({
+      x,
+      y,
+      width: w,
+      height: h,
+      color: rgb(0.94, 0.94, 0.94),
+      opacity: 0.95,
+    })
+    return
+  }
+  if (kind === 'bookmark') {
+    page.drawRectangle({
+      x: Math.max(0, x - 3),
+      y,
+      width: 3.2,
+      height: h,
+      color: TEAL_DEEP,
+      opacity: 0.9,
+    })
+  }
+}
+
+/**
+ * Crop a vertical band via MediaBox (no clip operators) → embed into `out`.
+ * Avoids pdf-lib "Expected instance of PDFDict" from clip+drawPage.
+ */
+async function embedCroppedBand(
+  out: PDFDocument,
+  srcBytes: Uint8Array,
+  pageIndex: number,
+  srcTop: number,
+  bandH: number,
+): Promise<{ embed: PDFEmbeddedPage; width: number; height: number }> {
+  const src = await loadPdfDoc(srcBytes)
+  const srcPage = src.getPages()[pageIndex]
+  if (!srcPage) throw new Error(`Sayfa ${pageIndex + 1} yok`)
+  const { width: srcW, height: srcH } = srcPage.getSize()
+  const h = Math.max(1, Math.min(bandH, srcH))
+  const top = Math.max(0, Math.min(srcTop, srcH - h))
+
+  const temp = await PDFDocument.create()
+  const full = await temp.embedPage(srcPage)
+  const bandPage = temp.addPage([srcW, h])
+  // Align source top `top` with the top of the short page (PDF y grows up).
+  bandPage.drawPage(full, {
+    x: 0,
+    y: h - srcH + top,
+    width: srcW,
+    height: srcH,
+  })
+
+  const tempBytes = clonePdfBytes(await temp.save())
+  const donor = await loadPdfDoc(tempBytes)
+  const [embed] = await out.embedPdf(donor, [0])
+  return { embed, width: srcW, height: h }
+}
+
+async function composeVectorPage(
+  out: PDFDocument,
+  srcBytes: Uint8Array,
+  pageIndex: number,
+  annotations: PdfAnnotation[],
+  fonts: Fonts,
+  marginNotes: PdfAnnotation[] = [],
+): Promise<void> {
+  const probe = await loadPdfDoc(srcBytes)
+  const srcPage = probe.getPages()[pageIndex]
+  if (!srcPage) return
+  const { width, height } = srcPage.getSize()
 
   const marginX = Math.max(28, width * 0.07)
   const cardWidth = width - marginX * 2
+  const rail = marginNotes.length > 0 ? MARGIN_RAIL : 0
 
   const pageInserts: PageInsert[] = annotations.map((a, idx) => {
     const yPct =
@@ -150,14 +488,26 @@ async function composeVectorPage(
   }
   totalH = Math.max(height, totalH)
 
-  const page = out.addPage([width, totalH])
+  const page = out.addPage([width + rail, totalH])
   let top = 0
 
   for (const seg of segments) {
     if (seg.type === 'band') {
       const bandH = Math.max(1, seg.height)
-      drawCroppedBand(page, embedded, width, height, seg.srcTop, bandH, top, totalH)
-      top += bandH
+      const { embed, width: bw, height: bh } = await embedCroppedBand(
+        out,
+        srcBytes,
+        pageIndex,
+        seg.srcTop,
+        bandH,
+      )
+      page.drawPage(embed, {
+        x: 0,
+        y: totalH - top - bh,
+        width: bw,
+        height: bh,
+      })
+      top += bh
       continue
     }
     const a = seg.insert.annotation
@@ -173,39 +523,22 @@ async function composeVectorPage(
     }
     top += cardH
   }
-}
 
-/** Draw a vertical slice of the source page (clipped) onto the composed page. */
-function drawCroppedBand(
-  page: PDFPage,
-  embedded: PDFEmbeddedPage,
-  srcW: number,
-  srcH: number,
-  srcTop: number,
-  bandH: number,
-  destTop: number,
-  pageH: number,
-): void {
-  const slotBottom = pageH - destTop - bandH
-  const drawY = pageH - destTop - srcH + srcTop
-
-  page.pushOperators(
-    pushGraphicsState(),
-    moveTo(0, slotBottom),
-    lineTo(srcW, slotBottom),
-    lineTo(srcW, slotBottom + bandH),
-    lineTo(0, slotBottom + bandH),
-    closePath(),
-    clip(),
-    endPath(),
-  )
-  page.drawPage(embedded, {
-    x: 0,
-    y: drawY,
-    width: srcW,
-    height: srcH,
-  })
-  page.pushOperators(popGraphicsState())
+  if (marginNotes.length) {
+    const sortedInserts = [...pageInserts].sort((a, b) => a.y - b.y)
+    drawMarginNotes(page, marginNotes, fonts, {
+      contentWidth: width,
+      contentHeight: height,
+      pageHeight: totalH,
+      yShift: (pageY) => {
+        let extra = 0
+        for (const ins of sortedInserts) {
+          if (pageY >= ins.y) extra += cardHeights.get(ins.id) || 0
+        }
+        return extra
+      },
+    })
+  }
 }
 
 function measureInsertCard(

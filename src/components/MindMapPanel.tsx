@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Background,
+  BackgroundVariant,
   Controls,
+  MiniMap,
   ReactFlow,
   type Edge,
   type Node,
@@ -32,6 +34,7 @@ import {
   speakText,
   stopSpeech,
 } from '@/lib/tts'
+import StudyMarkdown from '@/components/StudyMarkdown'
 
 type Props = {
   data: MindMapData
@@ -47,14 +50,31 @@ type Props = {
   refreshingMap?: boolean
 }
 
-const BRANCH_COLORS = [
-  '#0f766e',
-  '#1d4e89',
-  '#9a7b4f',
-  '#0b5a54',
+const BRANCH_COLORS_FALLBACK = [
+  '#2d4635',
+  '#3d6b8a',
+  '#a67c52',
+  '#3d5c48',
   '#5a6d7c',
-  '#14837a',
+  '#6fa98a',
 ]
+
+function readBranchColors(): string[] {
+  if (typeof document === 'undefined') return BRANCH_COLORS_FALLBACK
+  const cs = getComputedStyle(document.documentElement)
+  const pick = (name: string, fb: string) => {
+    const v = cs.getPropertyValue(name).trim()
+    return v || fb
+  }
+  return [
+    pick('--accent-mid', BRANCH_COLORS_FALLBACK[0]!),
+    pick('--accent', BRANCH_COLORS_FALLBACK[1]!),
+    pick('--gold', BRANCH_COLORS_FALLBACK[2]!),
+    pick('--accent-deep', BRANCH_COLORS_FALLBACK[3]!),
+    pick('--ink-muted', BRANCH_COLORS_FALLBACK[4]!),
+    pick('--accent-mid', BRANCH_COLORS_FALLBACK[5]!),
+  ]
+}
 
 type NodeData = {
   label: string
@@ -113,13 +133,13 @@ const nodeTypes = { concept: ConceptNode }
 type Branch = { label: string; children?: string[]; page?: number | null }
 
 function estimateHeight(label: string, kind: 'central' | 'branch' | 'leaf'): number {
-  const charsPerLine = kind === 'leaf' ? 22 : kind === 'branch' ? 20 : 16
+  const charsPerLine = kind === 'leaf' ? 24 : kind === 'branch' ? 22 : 18
   const lines = Math.max(
     1,
     Math.ceil(label.replace(/\s+/g, ' ').trim().length / charsPerLine),
   )
-  const lineH = kind === 'central' ? 19 : 15
-  const pad = kind === 'leaf' ? 16 : 20
+  const lineH = kind === 'central' ? 22 : 17
+  const pad = kind === 'leaf' ? 22 : 26
   const maxLines = kind === 'leaf' ? 3 : 2
   return pad + Math.min(lines, maxLines) * lineH
 }
@@ -153,9 +173,10 @@ function layoutMindMap(
   const focusIds: string[] = []
   const branches = tidyBranches(data.branches ?? [])
 
-  const COL = { central: 20, branch: 230, leaf: 420 }
-  const BRANCH_GAP = 18
-  const LEAF_GAP = 8
+  const COL = { central: 28, branch: 280, leaf: 520 }
+  const BRANCH_GAP = 26
+  const LEAF_GAP = 12
+  const colors = readBranchColors()
   const centralLabel =
     toTopicLabel(String(data.central || 'Konu'), {
       maxWords: 5,
@@ -165,7 +186,7 @@ function layoutMindMap(
   const laid = branches.map((b, i) => {
     const bid = `b-${i}`
     const open = openIds.has(bid)
-    const kids = open ? (b.children ?? []).slice(0, 6) : []
+    const kids = open ? (b.children ?? []).slice(0, 8) : []
     const leafHs = kids.map((c) => estimateHeight(c, 'leaf'))
     const leavesH =
       leafHs.reduce((s, h) => s + h, 0) +
@@ -181,7 +202,7 @@ function layoutMindMap(
       page: b.page ?? null,
       allChildren: b.children ?? [],
       open,
-      color: BRANCH_COLORS[i % BRANCH_COLORS.length]!,
+      color: colors[i % colors.length]!,
     }
   })
 
@@ -232,15 +253,16 @@ function layoutMindMap(
       source: 'central',
       target: branch.bid,
       type: 'smoothstep',
+      animated: branch.open,
       style: {
         stroke: branch.color,
-        strokeWidth: branch.open ? 1.8 : 1.4,
-        opacity: branch.open ? 0.95 : 0.7,
+        strokeWidth: branch.open ? 2.4 : 1.7,
+        opacity: branch.open ? 0.95 : 0.55,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
-        width: 11,
-        height: 11,
+        width: 14,
+        height: 14,
         color: branch.color,
       },
     })
@@ -272,8 +294,8 @@ function layoutMindMap(
           animated: true,
           style: {
             stroke: branch.color,
-            strokeWidth: 1.2,
-            opacity: 0.65,
+            strokeWidth: 1.45,
+            opacity: 0.72,
           },
         })
         focusIds.push(lid)
@@ -352,11 +374,28 @@ export default function MindMapPanel({
   const detailRef = useRef<HTMLElement | null>(null)
   const pendingFocusRef = useRef<string[] | null>(null)
   const coarse = useCoarsePointer()
+  const branchColors = useMemo(() => readBranchColors(), [data.central, data.branches])
 
   const { nodes, edges, focusIds } = useMemo(
     () => layoutMindMap(data, openIds),
     [data, openIds],
   )
+
+  const topicCount = useMemo(() => {
+    let n = 1 + branches.length
+    for (const b of branches) n += b.children?.length ?? 0
+    return n
+  }, [branches])
+
+  const openCount = openIds.size
+  const childCountOpen = useMemo(() => {
+    let n = 0
+    openIds.forEach((id) => {
+      const i = Number(id.replace('b-', ''))
+      if (Number.isFinite(i) && branches[i]) n += branches[i]!.children?.length ?? 0
+    })
+    return n
+  }, [openIds, branches])
 
   const canLocatePdf = Boolean(onOpenInPdf)
 
@@ -531,6 +570,8 @@ export default function MindMapPanel({
       ref={canvasRef}
       className={`mind-map-canvas ${expanded ? 'mind-map-canvas--expanded' : ''}`}
     >
+      <div className="mind-map-canvas__aurora" aria-hidden />
+      <div className="mind-map-canvas__grid" aria-hidden />
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -539,14 +580,14 @@ export default function MindMapPanel({
           rfRef.current = instance
           scheduleFit(false)
         }}
-        minZoom={0.4}
-        maxZoom={1.7}
+        minZoom={0.35}
+        maxZoom={2}
         proOptions={{ hideAttribution: true }}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable
-        panOnScroll={false}
-        zoomOnScroll={false}
+        panOnScroll={!coarse}
+        zoomOnScroll={!coarse}
         zoomOnPinch
         zoomOnDoubleClick={false}
         panOnDrag
@@ -555,16 +596,61 @@ export default function MindMapPanel({
         defaultEdgeOptions={{ type: 'smoothstep' }}
         attributionPosition="bottom-left"
       >
-        <Background gap={24} size={1} color="rgba(22, 37, 50, 0.045)" />
+        <Background
+          id="mind-dots"
+          variant={BackgroundVariant.Dots}
+          gap={22}
+          size={1.15}
+          color={`${branchColors[0] || '#3d5c48'}44`}
+        />
+        <Background
+          id="mind-lines"
+          variant={BackgroundVariant.Lines}
+          gap={88}
+          size={1}
+          color={`${branchColors[0] || '#3d5c48'}22`}
+        />
+        <MiniMap
+          className="mind-map-minimap"
+          pannable
+          zoomable
+          nodeStrokeWidth={2}
+          maskColor="rgba(18, 24, 32, 0.18)"
+          nodeColor={(n) => {
+            const d = n.data as NodeData
+            if (d.kind === 'central') return branchColors[3] || branchColors[0] || '#243a2c'
+            return String(d.color || branchColors[0] || '#3d5c48')
+          }}
+        />
         <Controls showInteractive={false} showFitView={false} />
       </ReactFlow>
+      <div className="mind-map-hud" aria-hidden>
+        <span>{topicCount} düğüm</span>
+        <span>·</span>
+        <span>{branches.length} dal</span>
+        {openCount > 0 ? (
+          <>
+            <span>·</span>
+            <span className="mind-map-hud__live">
+              {openCount} açık · {childCountOpen} alt
+            </span>
+          </>
+        ) : (
+          <>
+            <span>·</span>
+            <span>genel bakış</span>
+          </>
+        )}
+      </div>
     </div>
   )
 
   const detailCard = detail ? (
     <aside
       ref={detailRef}
-      className={`mind-map-detail ${coarse ? 'mind-map-detail--sheet' : ''}`}
+      className={`mind-map-detail mind-map-detail--glass ${
+        coarse ? 'mind-map-detail--sheet' : 'mind-map-detail--dock'
+      }`}
       aria-live="polite"
     >
       {coarse ? <div className="mind-map-detail__grab" aria-hidden /> : null}
@@ -619,9 +705,7 @@ export default function MindMapPanel({
       ) : null}
 
       <div className="mind-map-detail__body">
-        {detail.narrative.split(/\n{2,}/).map((p, i) => (
-          <p key={i}>{p}</p>
-        ))}
+        <StudyMarkdown markdown={detail.narrative} compact />
       </div>
 
       {detail.points.length > 0 && (
@@ -639,16 +723,21 @@ export default function MindMapPanel({
 
   const panel = (
     <div
-      className={`mind-map-panel ${expanded ? 'mind-map-panel--expanded' : ''}`}
+      className={`mind-map-panel mind-map-panel--spectacle ${
+        expanded ? 'mind-map-panel--expanded' : ''
+      }${detail && !coarse ? ' mind-map-panel--with-detail' : ''}`}
     >
       <div className="mind-map-panel__head">
         <div>
-          <p className="section-label mb-0">Konu haritası</p>
+          <p className="mind-map-panel__kicker">Konu ağı</p>
+          <h2 className="mind-map-panel__title">
+            {title?.trim() || String(data.central || 'Zihin haritası')}
+          </h2>
           {!collapsed && (
-            <p className="muted text-[11px]">
+            <p className="mind-map-panel__sub">
               {coarse
-                ? 'Başlığa dokun → alt başlıklar açılır'
-                : 'Ana başlığa tıkla → alt başlıkları aç · zoom'}
+                ? 'Düğüme dokun — alt başlıklar açılır, PDF’ye sıçra'
+                : 'Dalı genişlet · scroll ile zoom · detay paneli sağda'}
             </p>
           )}
         </div>
@@ -656,7 +745,7 @@ export default function MindMapPanel({
           {onRefreshMap ? (
             <button
               type="button"
-              className="btn-ghost text-xs"
+              className="mind-map-tool"
               disabled={refreshingMap}
               onClick={() => onRefreshMap()}
             >
@@ -665,7 +754,7 @@ export default function MindMapPanel({
           ) : null}
           <button
             type="button"
-            className="btn-ghost text-xs"
+            className="mind-map-tool"
             onClick={() => {
               const next = !collapsed
               setCollapsed(next)
@@ -678,19 +767,19 @@ export default function MindMapPanel({
             <>
               <button
                 type="button"
-                className="btn-ghost text-xs"
+                className="mind-map-tool"
                 onClick={resetOverview}
               >
                 Genel bakış
               </button>
               <button
                 type="button"
-                className="btn-ghost text-xs"
+                className="mind-map-tool mind-map-tool--accent"
                 onClick={() => {
                   setExpanded((v) => !v)
                 }}
               >
-                {expanded ? 'Küçült' : 'Tam ekran'}
+                {expanded ? 'Küçült' : 'Tam sahne'}
               </button>
             </>
           )}
@@ -702,7 +791,7 @@ export default function MindMapPanel({
           <div className="mind-map-jumps" role="list">
             <button
               type="button"
-              className="mind-map-jump"
+              className="mind-map-jump mind-map-jump--hub"
               role="listitem"
               onClick={() => {
                 setOpenIds(new Set())
@@ -722,6 +811,7 @@ export default function MindMapPanel({
             {branches.map((b, i) => {
               const bid = `b-${i}`
               const isOpen = openIds.has(bid)
+              const color = branchColors[i % branchColors.length]!
               return (
                 <button
                   key={`${b.label}-${i}`}
@@ -729,14 +819,15 @@ export default function MindMapPanel({
                   className={`mind-map-jump${isOpen ? ' mind-map-jump--active' : ''}`}
                   role="listitem"
                   style={{
-                    borderColor: `${BRANCH_COLORS[i % BRANCH_COLORS.length]}55`,
+                    borderColor: `${color}66`,
+                    ['--jump-glow' as string]: color,
                   }}
                   onClick={() =>
                     toggleBranch(bid, {
                       label: b.label,
                       kind: 'branch',
                       children: b.children,
-                      color: BRANCH_COLORS[i % BRANCH_COLORS.length],
+                      color,
                       page: b.page,
                       branchId: bid,
                       childCount: b.children?.length ?? 0,
@@ -745,9 +836,7 @@ export default function MindMapPanel({
                 >
                   <span
                     className="mind-map-legend__dot"
-                    style={{
-                      background: BRANCH_COLORS[i % BRANCH_COLORS.length],
-                    }}
+                    style={{ background: color }}
                   />
                   {b.label.length > 28 ? `${b.label.slice(0, 26)}…` : b.label}
                 </button>
@@ -755,9 +844,13 @@ export default function MindMapPanel({
             })}
           </div>
 
-          {canvas}
+          <div className="mind-map-stage">
+            {canvas}
+            {detail && !coarse ? (
+              <div className="mind-map-stage__detail">{detailCard}</div>
+            ) : null}
+          </div>
 
-          {detail && !coarse ? detailCard : null}
           {detail && coarse
             ? createPortal(
                 <div

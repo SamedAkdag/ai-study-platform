@@ -15,26 +15,26 @@ type Step = {
 const STEPS: Step[] = [
   {
     id: 'upload',
-    title: 'PDF’yi bırak, üniteler gelsin',
-    body: 'Ders kitabını yükle. Studium metni çıkarır, konuları ~5 sayfalık üniteler halinde ayırır.',
+    title: 'Dosyayı bırak, kitaplığın oluşsun',
+    body: 'PDF, Word, görsel veya metin yükle. Studium üniteleri ayırır; giriş yapmadan da Kitaplık’ta kalır.',
     visual: 'upload',
   },
   {
     id: 'study',
     title: 'PDF üzerinden çalış',
-    body: 'Asıl iş kaynağın üzerinde: metni seç → sor, alıntı al, işaretle. Anlatım ve Alıştır yanında durur.',
+    body: 'Kaynak’ta metni seç → sor, alıntı al, işaretle. Anlatım, Alıştır, Zihin haritası ve Dinle (ders anlatımı) yanında durur.',
     visual: 'study',
   },
   {
     id: 'ask',
     title: 'Anlamadığın yeri seç',
-    body: 'Kaynak’ta metni seç → AI’ya sor, Cite veya Vurgula. Cevabı “Kitaba ekle” ile sayfanın altına gömersin.',
+    body: 'Seçim çubuğundan AI’ya sor, Cite veya Vurgula. Cevabı “Kitaba ekle” ile sayfanın altına gömersin; Notlar’dan sayfaya dönersin.',
     visual: 'ask',
   },
   {
     id: 'quiz',
-    title: 'Alıştır: sınav, çözümlü, Flash',
-    body: 'Ünite sınavı ve çözümlü örneklerle kendini kontrol et. Flash isteğe bağlı. Skoru kopyalayabilir veya gruba gönderebilirsin.',
+    title: 'Alıştır ve Tekrar',
+    body: 'Ünite sınavı ve Flash ile kendini kontrol et. Quiz bitince Tekrar planına düşer — bugün ne çalışacağını oradan görürsün.',
     visual: 'quiz',
   },
   {
@@ -66,7 +66,7 @@ function TourVisual({ kind }: { kind: Step['visual'] }) {
         <div className="tour-mock-chips" style={{ marginTop: '0.4rem' }}>
           <span className="tour-chip on">PDF</span>
           <span className="tour-chip">Anlatım</span>
-          <span className="tour-chip">Alıştır</span>
+          <span className="tour-chip">Zihin haritası</span>
         </div>
         <div className="tour-mock-lines">
           <i />

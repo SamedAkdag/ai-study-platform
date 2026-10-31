@@ -61,6 +61,16 @@ function isPdfTextLayerRoot(root: HTMLElement): boolean {
   return !!root.querySelector('.textLayer, .pdf-text-layer')
 }
 
+/** AI/note inserts are HTML prose — not pdf.js spans. */
+function rangeInInsert(range: Range): boolean {
+  const n = range.commonAncestorContainer
+  const el =
+    n.nodeType === Node.ELEMENT_NODE
+      ? (n as Element)
+      : n.parentElement
+  return !!el?.closest('[data-insert-slot], .pdf-insert')
+}
+
 /**
  * pdf.js absolute text-layer spans are often out of visual order in the DOM.
  * Native Selection then highlights / stringifies unrelated spans between the
@@ -289,6 +299,14 @@ export function useTextSelection(
       return
     }
 
+    // Insert blocks are selectable HTML; don't run pdf.js geometric filter
+    if (rangeInInsert(range)) {
+      clearPdfSelMarks(root)
+      const next = readTextSelection(root)
+      applyCtx(next)
+      return
+    }
+
     if (isPdfTextLayerRoot(root)) {
       const geo = selectedTextGeometric(root, range)
       clearPdfSelMarks(root)
@@ -337,16 +355,31 @@ export function useTextSelection(
 
     const onSelectionChange = () => {
       if (holdingRef.current) return
-      // While dragging on a PDF layer, skip intermediate DOM-order noise
       const root = rootRef.current
-      if (root && isPdfTextLayerRoot(root) && draggingRef.current) return
+      const live = window.getSelection()
+      const inInsert =
+        !!live &&
+        live.rangeCount > 0 &&
+        !live.isCollapsed &&
+        rangeInInsert(live.getRangeAt(0))
+
+      // While dragging on a PDF layer, skip intermediate DOM-order noise
+      if (root && isPdfTextLayerRoot(root) && draggingRef.current && !inInsert) {
+        return
+      }
 
       window.clearTimeout(timerRef.current)
       timerRef.current = window.setTimeout(() => {
         if (holdingRef.current) return
         const el = rootRef.current
         if (!el) return
-        if (isPdfTextLayerRoot(el)) return // wait for pointerup
+        const sel = window.getSelection()
+        const insertSel =
+          !!sel &&
+          sel.rangeCount > 0 &&
+          !sel.isCollapsed &&
+          rangeInInsert(sel.getRangeAt(0))
+        if (isPdfTextLayerRoot(el) && !insertSel) return // wait for pointerup
         const next = readTextSelection(el)
         if (next) applyCtx(next)
       }, 80)

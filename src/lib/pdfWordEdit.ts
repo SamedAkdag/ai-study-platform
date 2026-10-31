@@ -1,5 +1,6 @@
 import { PDFDocument } from 'pdf-lib'
 import { pdfjsLib } from '@/lib/pdfjs'
+import { clonePdfBytes, loadPdfDoc } from '@/lib/pdfManipulate'
 
 /** One editable word/token from PDF.js textContent (demo-style). */
 export type PdfWordGroup = {
@@ -258,11 +259,13 @@ async function replacePageWithPng(
   pageWidth: number,
   pageHeight: number,
 ): Promise<Uint8Array> {
-  const src = await PDFDocument.load(bytes, { ignoreEncryption: true })
+  const src = await loadPdfDoc(bytes)
   const out = await PDFDocument.create()
   const png = await out.embedPng(pngBytes)
   const n = src.getPageCount()
   const idx = pageNumber1 - 1
+  // Copy all pages in one call — safer page tree than per-index copyPages loops
+  const copied = await out.copyPages(src, src.getPageIndices())
   for (let i = 0; i < n; i++) {
     if (i === idx) {
       const page = out.addPage([pageWidth, pageHeight])
@@ -273,11 +276,10 @@ async function replacePageWithPng(
         height: pageHeight,
       })
     } else {
-      const [copied] = await out.copyPages(src, [i])
-      out.addPage(copied)
+      out.addPage(copied[i]!)
     }
   }
-  return out.save()
+  return clonePdfBytes(await out.save())
 }
 
 /** Find word group whose box intersects a screen-space rect (selection). */
@@ -293,10 +295,10 @@ export function findWordGroupAt(
   let bestArea = Infinity
   for (const g of groups) {
     if (
-      x >= g.left &&
-      x <= g.left + Math.max(g.width, 4) &&
-      y >= g.top - 2 &&
-      y <= g.top + g.fontHeight + 4
+      x >= g.left - 1 &&
+      x <= g.left + Math.max(g.width, 4) + 1 &&
+      y >= g.top - 3 &&
+      y <= g.top + g.fontHeight + 5
     ) {
       const area = Math.max(g.width, 4) * (g.fontHeight + 4)
       if (area < bestArea) {

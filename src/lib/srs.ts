@@ -210,6 +210,57 @@ async function pushSrsRemote(item: SrsItem): Promise<void> {
   }
 }
 
+/** Pull all SRS rows for the signed-in user into local store. */
+export async function pullAllSrsForUser(): Promise<number> {
+  try {
+    const userId = await currentUserId()
+    if (!userId) return listDueToday().length
+
+    const { data, error } = await supabase
+      .from('srs_items')
+      .select('*')
+      .eq('user_id', userId)
+      .limit(500)
+
+    if (error) {
+      console.warn('srs pull-all failed', error)
+      return listDueToday().length
+    }
+    if (!data?.length) return listDueToday().length
+
+    const store = readStore()
+    for (const row of data) {
+      const id = itemId(row.book_id, row.chapter_id, row.item_key || 'chapter')
+      const remote: SrsItem = {
+        bookId: row.book_id,
+        chapterId: row.chapter_id,
+        itemKey: row.item_key || 'chapter',
+        ease: Number(row.ease) || 2.5,
+        intervalDays: Number(row.interval_days) || 0,
+        repetitions: Number(row.repetitions) || 0,
+        dueAt: String(row.due_at).slice(0, 10),
+        updatedAt: row.updated_at || new Date().toISOString(),
+        lastGrade:
+          typeof row.last_grade === 'number'
+            ? (row.last_grade as SrsGrade)
+            : undefined,
+      }
+      const prev = store[id]
+      if (
+        !prev ||
+        new Date(remote.updatedAt).getTime() >=
+          new Date(prev.updatedAt).getTime()
+      ) {
+        store[id] = remote
+      }
+    }
+    writeStore(store)
+    return listDueToday().length
+  } catch {
+    return listDueToday().length
+  }
+}
+
 /** Merge remote SRS into local (prefer newer updatedAt). */
 export async function pullSrsForBook(bookId: string): Promise<SrsItem[]> {
   try {

@@ -4,6 +4,9 @@ import 'katex/dist/katex.min.css'
 import './index.css'
 import App from './App'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import { initMoodTheme } from '@/lib/moodTheme'
+
+initMoodTheme()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

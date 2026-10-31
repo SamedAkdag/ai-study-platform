@@ -16,10 +16,10 @@ import type { PdfSelectionPayload } from '@/types/pdfSelection'
 
 const MODE_Q: Record<PdfAiMode, string> = {
   summarize:
-    'Seçili pasajı kısa ve net özetle. Madde işaretleri kullan; gereksiz uzatma.',
+    'Seçili pasajı kısa ve net özetle. Madde işaretleri kullan; gereksiz uzatma. Karşılaştırma veya liste varsa geçerli GFM markdown tablosu yaz: her satır ayrı satırda olsun; başlık, sonra |---|---|, sonra veri satırları. Satırları > ile birleştirme; code fence kullanma.',
   explain:
-    'Seçili pasajı bir öğrenciye açıkla: tanım, neden önemli, 1 günlük hayat benzetmesi.',
-  ask: 'Seçili pasaj hakkında net ve öğretici bir açıklama yap.',
+    'Seçili pasajı bir öğrenciye açıkla: tanım, neden önemli, 1 günlük hayat benzetmesi. Tablo gerekiyorsa GFM markdown tablosu kullan (her satır ayrı; |---|---| ayırıcı; > veya code fence yok).',
+  ask: 'Seçili pasaj hakkında net ve öğretici bir açıklama yap. Tablo gerekiyorsa GFM markdown tablosu kullan (her satır ayrı; |---|---| ayırıcı; > veya code fence yok).',
 }
 
 export type InsertDraft =

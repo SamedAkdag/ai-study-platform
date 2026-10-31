@@ -6,6 +6,7 @@ import {
   type PdfAnnotation,
 } from '@/lib/pdfAnnotations'
 import { isFlowInsert } from '@/lib/pdfInserts'
+import { getExportPalette, type ExportPalette } from '@/lib/moodTheme'
 
 export type ExportableNote = PdfAnnotation
 
@@ -114,6 +115,7 @@ async function markdownToStyledPdf(
   meta: { bookTitle: string },
   fileBase: string,
 ): Promise<void> {
+  const palette = getExportPalette()
   const host = document.createElement('div')
   host.setAttribute('data-pdf-export', '1')
   Object.assign(host.style, {
@@ -123,14 +125,14 @@ async function markdownToStyledPdf(
     width: '720px',
     padding: '0',
     margin: '0',
-    background: '#ffffff',
-    color: '#162532',
+    background: palette.paper,
+    color: palette.ink,
     zIndex: '2147483646',
     opacity: '1',
     pointerEvents: 'none',
   } as Partial<CSSStyleDeclaration>)
 
-  host.innerHTML = buildStyledDocument(md, meta.bookTitle)
+  host.innerHTML = buildStyledDocument(md, meta.bookTitle, palette)
   document.body.appendChild(host)
 
   try {
@@ -151,7 +153,7 @@ async function markdownToStyledPdf(
       scale,
       useCORS: true,
       allowTaint: true,
-      backgroundColor: '#ffffff',
+      backgroundColor: palette.paper,
       logging: false,
       width: target.scrollWidth,
       height: target.scrollHeight,
@@ -178,6 +180,16 @@ async function markdownToStyledPdf(
 
     // Source slice height in canvas pixels per PDF page
     const slicePx = (pageContentHmm / imgHmm) * canvas.height
+    const ink255 = palette.inkRgb.map((n) => Math.round(n * 255)) as [
+      number,
+      number,
+      number,
+    ]
+    const mark255 = palette.inkMutedRgb.map((n) => Math.round(n * 255)) as [
+      number,
+      number,
+      number,
+    ]
 
     for (let i = 0; i < totalPages; i++) {
       if (i > 0) pdf.addPage()
@@ -191,7 +203,7 @@ async function markdownToStyledPdf(
       pageCanvas.height = srcH
       const ctx = pageCanvas.getContext('2d')
       if (!ctx) continue
-      ctx.fillStyle = '#ffffff'
+      ctx.fillStyle = palette.paper
       ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
       ctx.drawImage(
         canvas,
@@ -215,12 +227,11 @@ async function markdownToStyledPdf(
         sliceHmm,
       )
 
-      // Light Studium watermark (Adobe-style shared-copy mark)
       pdf.setFont('helvetica', 'normal')
       pdf.setFontSize(8)
-      pdf.setTextColor(160, 160, 160)
+      pdf.setTextColor(mark255[0]!, mark255[1]!, mark255[2]!)
       pdf.text('Studium', pageW - margin, pageH - 6, { align: 'right' })
-      pdf.setTextColor(22, 37, 50)
+      pdf.setTextColor(ink255[0]!, ink255[1]!, ink255[2]!)
     }
 
     const stamp = new Date().toISOString().slice(0, 10)
@@ -476,8 +487,13 @@ function mdToHtml(md: string): string {
   return out.join('\n')
 }
 
-function buildStyledDocument(md: string, bookTitle: string): string {
+function buildStyledDocument(
+  md: string,
+  bookTitle: string,
+  palette: ExportPalette,
+): string {
   const body = mdToHtml(md)
+  const softBorder = `color-mix(in srgb, ${palette.accent} 28%, transparent)`
   return `
 <div class="pdf-doc">
   <style>
@@ -485,8 +501,8 @@ function buildStyledDocument(md: string, bookTitle: string): string {
       box-sizing: border-box;
       width: 720px;
       padding: 40px 44px 48px;
-      background: #ffffff;
-      color: #162532;
+      background: ${palette.paper};
+      color: ${palette.ink};
       font-family: "Literata", "Iowan Old Style", "Times New Roman", Georgia, serif;
       font-size: 15.5px;
       line-height: 1.62;
@@ -499,22 +515,22 @@ function buildStyledDocument(md: string, bookTitle: string): string {
       letter-spacing: -0.025em;
       line-height: 1.2;
       margin: 0 0 0.35rem;
-      color: #162532;
+      color: ${palette.ink};
     }
     .pdf-doc h2 {
       font-size: 1.2rem;
       font-weight: 650;
       margin: 0 0 0.85rem;
-      color: #0b5a54;
+      color: ${palette.accentDeep};
     }
     .pdf-doc h3 {
       font-size: 1.02rem;
       font-weight: 650;
       margin: 1.45rem 0 0.5rem;
-      color: #0f766e;
+      color: ${palette.accentMid};
     }
     .pdf-doc .meta {
-      color: #5a6d7c;
+      color: ${palette.inkMuted};
       font-size: 0.9rem;
       margin: 0 0 1.25rem;
       font-style: italic;
@@ -522,21 +538,21 @@ function buildStyledDocument(md: string, bookTitle: string): string {
     .pdf-doc p {
       margin: 0 0 0.85rem;
     }
-    .pdf-doc strong { font-weight: 700; color: #12202b; }
-    .pdf-doc em { font-style: italic; }
+    .pdf-doc strong { font-weight: 700; color: ${palette.accentDeep}; }
+    .pdf-doc em { font-style: italic; color: ${palette.inkMuted}; }
     .pdf-doc code {
       font-family: ui-monospace, Consolas, monospace;
       font-size: 0.88em;
-      background: #eef4f6;
+      background: ${palette.accentSoft};
       padding: 0.1em 0.35em;
       border-radius: 4px;
     }
     .pdf-doc blockquote {
       margin: 0.5rem 0 1rem;
       padding: 0.65rem 0.9rem;
-      border-left: 3px solid #0f766e;
-      background: linear-gradient(90deg, #e4f3f1 0%, #f3faf9 100%);
-      color: #4a5f6e;
+      border-left: 3px solid ${palette.accent};
+      background: linear-gradient(90deg, ${palette.accentSoft} 0%, ${palette.paper} 100%);
+      color: ${palette.inkMuted};
       font-size: 0.95rem;
       border-radius: 0 8px 8px 0;
     }
@@ -547,7 +563,7 @@ function buildStyledDocument(md: string, bookTitle: string): string {
     .pdf-doc li { margin: 0.25rem 0; }
     .pdf-doc hr {
       border: 0;
-      border-top: 1px solid rgba(22, 37, 50, 0.12);
+      border-top: 1px solid ${softBorder};
       margin: 1.35rem 0;
     }
     .pdf-doc .table-wrap {
@@ -555,8 +571,8 @@ function buildStyledDocument(md: string, bookTitle: string): string {
       margin: 0.85rem 0 1.25rem;
       overflow: hidden;
       border-radius: 10px;
-      border: 1px solid rgba(15, 118, 110, 0.22);
-      background: #fbfefe;
+      border: 1px solid ${softBorder};
+      background: ${palette.surface};
     }
     .pdf-doc table {
       width: 100%;
@@ -569,8 +585,8 @@ function buildStyledDocument(md: string, bookTitle: string): string {
       border: 0;
     }
     .pdf-doc thead th {
-      background: #e4f3f1;
-      color: #0b5a54;
+      background: ${palette.accentSoft};
+      color: ${palette.accentDeep};
       font-weight: 700;
       font-size: 0.82rem;
       letter-spacing: 0.01em;
@@ -579,20 +595,20 @@ function buildStyledDocument(md: string, bookTitle: string): string {
     }
     .pdf-doc tbody td {
       padding: 0.5rem 0.7rem;
-      color: #162532;
+      color: ${palette.ink};
       vertical-align: top;
-      background: #ffffff;
+      background: ${palette.surface};
     }
     .pdf-doc tbody tr:nth-child(even) td {
-      background: rgba(228, 243, 241, 0.45);
+      background: ${palette.accentSoft};
     }
-    .pdf-doc a { color: #0f766e; text-decoration: none; }
+    .pdf-doc a { color: ${palette.accentMid}; text-decoration: none; }
     .pdf-doc .pdf-footer {
       margin-top: 2.25rem;
       padding-top: 0.85rem;
-      border-top: 1px solid rgba(22, 37, 50, 0.1);
+      border-top: 1px solid ${softBorder};
       font-size: 0.78rem;
-      color: #8494a1;
+      color: ${palette.inkSoft};
       font-family: "Segoe UI", system-ui, sans-serif;
       letter-spacing: 0.02em;
     }
