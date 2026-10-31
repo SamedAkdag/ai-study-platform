@@ -1,9 +1,7 @@
 /**
- * Browser-only Turkish TTS via EMA Lightning ONNX (Apache-2.0).
- * Weights load from Hugging Face with CORS + Cache Storage — nothing is sent to our servers.
- *
- * Backend note: WebGPU path is opt-in only. Many GPUs fail at OrtRun with
- * "Cast … requires f16" even on fp32 graphs; WASM is the reliable default.
+ * Browser EMA Lightning TTS — same fast path as the first integration:
+ * WebGPU + fp32, stream audio to speakers as soon as each chunk is ready.
+ * Word timings are collected on the side (onPiece) without changing the synth loop.
  */
 import { EMA, wavBlob, RATE } from '@/lib/ema/tts.js'
 import {
@@ -20,6 +18,8 @@ export const EMA_MODEL_BASE =
 
 export { RATE, wavBlob }
 
+export const EMA_SOFT_CHAR_LIMIT = 2200
+
 export type EmaLoadProgress = {
   stage: string
   fraction: number
@@ -30,13 +30,18 @@ export type EmaSynthProgress = {
   phase: 'loading' | 'synthesizing'
   label: string
   piece?: number
-  pieces?: number
+}
+
+export type SynthResult = {
+  blob: Blob
+  chunks: Float32Array[]
+  sampleRate: number
+  timings: EmaTimingTrack
+  timingsJson: string
 }
 
 type EnsureOpts = {
   onProgress?: (p: EmaLoadProgress) => void
-  precision?: 'fp16' | 'fp32'
-  /** Default is wasm (stable). Pass webgpu only for experiments. */
   forceBackend?: 'webgpu' | 'wasm'
 }
 
@@ -59,12 +64,19 @@ function stageLabel(stage: string): string {
   }
 }
 
+function preferWasmOnly(): boolean {
+  if (typeof navigator === 'undefined') return true
+  const ua = navigator.userAgent || ''
+  if (/iPhone|iPad|iPod/i.test(ua)) return true
+  if (/Safari/i.test(ua) && !/Chrome|Chromium|Edg/i.test(ua)) return true
+  return typeof navigator.gpu === 'undefined'
+}
+
 async function loadBackend(
   backend: 'webgpu' | 'wasm',
   opts: EnsureOpts,
 ): Promise<InstanceType<typeof EMA>> {
-  const precision = opts.precision ?? 'fp32'
-  const ema = await EMA.load(
+  return EMA.load(
     backend,
     EMA_MODEL_BASE,
     (stage, fraction) => {
@@ -74,9 +86,8 @@ async function loadBackend(
         label: stageLabel(stage),
       })
     },
-    precision,
+    'fp32',
   )
-  return ema
 }
 
 export async function resetEma() {
@@ -87,35 +98,29 @@ export async function resetEma() {
   if (prev) await prev.release().catch(() => {})
 }
 
-/** Singleton load — WASM by default (WebGPU often breaks without shader-f16). */
+/** WebGPU first (original fast path), WASM only if needed. */
 export async function ensureEma(
   opts: EnsureOpts = {},
 ): Promise<InstanceType<typeof EMA>> {
   if (instance) return instance
   if (loadPromise) return loadPromise
 
-  const backend: 'webgpu' | 'wasm' =
-    opts.forceBackend === 'webgpu' ? 'webgpu' : 'wasm'
+  const forced = opts.forceBackend
+  const tryGpu = forced === 'webgpu' || (!forced && !preferWasmOnly())
 
   loadPromise = (async () => {
-    try {
-      instance = await loadBackend(backend, {
-        ...opts,
-        precision: opts.precision ?? 'fp32',
-      })
-      lastBackend = backend
-      return instance
-    } catch (err) {
-      if (backend === 'webgpu') {
-        instance = await loadBackend('wasm', {
-          ...opts,
-          precision: 'fp32',
-        })
-        lastBackend = 'wasm'
+    if (tryGpu) {
+      try {
+        instance = await loadBackend('webgpu', opts)
+        lastBackend = 'webgpu'
         return instance
+      } catch {
+        /* fall through */
       }
-      throw err
     }
+    instance = await loadBackend('wasm', opts)
+    lastBackend = 'wasm'
+    return instance
   })()
 
   try {
@@ -136,14 +141,31 @@ export function isEmaReady(): boolean {
   return !!instance
 }
 
-function isRecoverableInferenceError(err: unknown): boolean {
+function isGpuInferenceError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err || '')
-  return /OrtRun|shader_helper|requires f16|shader-f16|WebGPU|Cast node|Non-zero status|Failed to run|EXIT|wasm/i.test(
+  return /OrtRun|shader_helper|requires f16|shader-f16|WebGPU|Cast node|Non-zero status/i.test(
     msg,
   )
 }
 
-/** Schedule Float32 chunks on an AudioContext for gapless-ish streaming play. */
+export function softTrimForEma(
+  text: string,
+  limit = EMA_SOFT_CHAR_LIMIT,
+): { text: string; truncated: boolean } {
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (t.length <= limit) return { text: t, truncated: false }
+  const slice = t.slice(0, limit)
+  const cut = Math.max(
+    slice.lastIndexOf('. '),
+    slice.lastIndexOf('! '),
+    slice.lastIndexOf('? '),
+    slice.lastIndexOf('; '),
+  )
+  const body = (cut > limit * 0.5 ? slice.slice(0, cut + 1) : slice).trim()
+  return { text: body, truncated: true }
+}
+
+/** Gapless-ish WebAudio player — same idea as the first working demo. */
 export function createChunkPlayer(sampleRate = RATE) {
   const Ctx =
     window.AudioContext ||
@@ -151,6 +173,7 @@ export function createChunkPlayer(sampleRate = RATE) {
       .webkitAudioContext
   const ctx = new Ctx({ sampleRate })
   let next = 0
+  let origin: number | null = null
   let stopped = false
 
   return {
@@ -168,22 +191,24 @@ export function createChunkPlayer(sampleRate = RATE) {
       src.buffer = buffer
       src.connect(ctx.destination)
       const t = Math.max(ctx.currentTime, next)
+      if (origin == null) origin = t
       src.start(t)
       next = t + buffer.duration
+    },
+    /** Seconds since first scheduled sample (for live karaoke). */
+    currentTime() {
+      if (origin == null) return 0
+      return Math.max(0, ctx.currentTime - origin)
+    },
+    /** AudioContext time when the queued buffer ends. */
+    queuedUntil() {
+      return next
     },
     stop() {
       stopped = true
       void ctx.close().catch(() => {})
     },
   }
-}
-
-export type SynthResult = {
-  blob: Blob
-  chunks: Float32Array[]
-  sampleRate: number
-  timings: EmaTimingTrack
-  timingsJson: string
 }
 
 async function runStream(
@@ -193,26 +218,33 @@ async function runStream(
     speed?: number
     seed?: number
     signal?: AbortSignal
-    onChunk?: (chunk: Float32Array, index: number) => void
-    onSynthProgress?: (p: EmaSynthProgress) => void
     play?: boolean
+    onSynthProgress?: (p: EmaSynthProgress) => void
+    onTimings?: (t: EmaTimingTrack) => void
+    onClock?: (seconds: number) => void
   },
 ): Promise<SynthResult> {
-  const player = opts.play ? createChunkPlayer(RATE) : null
-  if (player) await player.resume()
-
   const collector = createTimingCollector(RATE)
   const chunks: Float32Array[] = []
-  let i = 0
   let pcm = 0
   let piece = 0
-  const pieceTotal = (() => {
-    try {
-      return tts.pieces(text, opts.speed ?? 1).length
-    } catch {
-      return 0
-    }
-  })()
+
+  // Stream to speakers immediately (first-integration UX)
+  const player = opts.play !== false ? createChunkPlayer(RATE) : null
+  if (player) await player.resume()
+
+  let clockRaf = 0
+  const tickClock = () => {
+    if (!player) return
+    opts.onClock?.(player.currentTime())
+    clockRaf = requestAnimationFrame(tickClock)
+  }
+  if (player && opts.onClock) clockRaf = requestAnimationFrame(tickClock)
+
+  opts.onSynthProgress?.({
+    phase: 'synthesizing',
+    label: 'Ses üretiliyor…',
+  })
 
   try {
     for await (const audio of tts.stream(text, {
@@ -221,26 +253,34 @@ async function runStream(
       onPiece: (info) => {
         piece += 1
         collector.onPiece(info)
+        // Partial timings for live highlight while audio is already playing
+        opts.onTimings?.(collector.finalize(pcm || 1))
         opts.onSynthProgress?.({
           phase: 'synthesizing',
-          label:
-            pieceTotal > 0
-              ? `Ses üretiliyor… (${piece}/${pieceTotal})`
-              : `Ses üretiliyor… (${piece})`,
+          label: `Ses üretiliyor… (${piece})`,
           piece,
-          pieces: pieceTotal || undefined,
         })
       },
     })) {
       if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
       chunks.push(audio)
       pcm += audio.length
-      opts.onChunk?.(audio, i++)
       player?.play(audio)
     }
   } catch (err) {
     player?.stop()
+    if (clockRaf) cancelAnimationFrame(clockRaf)
     throw err
+  }
+
+  if (clockRaf) cancelAnimationFrame(clockRaf)
+  // Keep AudioContext alive until scheduled buffers finish
+  if (player) {
+    const remainingMs = Math.max(
+      0,
+      (player.queuedUntil() - player.ctx.currentTime + 0.35) * 1000,
+    )
+    window.setTimeout(() => player.stop(), Math.ceil(remainingMs))
   }
 
   if (!chunks.length || pcm < 100) {
@@ -248,6 +288,8 @@ async function runStream(
   }
 
   const timings = collector.finalize(pcm)
+  opts.onTimings?.(timings)
+
   return {
     blob: wavBlob(chunks),
     chunks,
@@ -257,10 +299,6 @@ async function runStream(
   }
 }
 
-/**
- * Synthesize text → WAV + word timings.
- * Uses WASM by default; if a leftover WebGPU session fails, resets and retries WASM.
- */
 export async function synthesizeEmaWav(
   text: string,
   opts: {
@@ -269,34 +307,17 @@ export async function synthesizeEmaWav(
     signal?: AbortSignal
     onProgress?: (p: EmaLoadProgress) => void
     onSynthProgress?: (p: EmaSynthProgress) => void
-    onChunk?: (chunk: Float32Array, index: number) => void
+    onTimings?: (t: EmaTimingTrack) => void
+    onClock?: (seconds: number) => void
+    /** Default true — play while generating (original fast feel). */
     play?: boolean
   } = {},
 ): Promise<SynthResult> {
   const trimmed = String(text || '').replace(/\s+/g, ' ').trim()
   if (trimmed.length < 2) throw new Error('Okunacak metin yok')
 
-  // Drop a broken WebGPU singleton from earlier sessions in this tab
-  if (lastBackend === 'webgpu') {
-    await resetEma()
-  }
-
-  opts.onSynthProgress?.({
-    phase: 'loading',
-    label: 'Ses modeli hazırlanıyor…',
-  })
-
-  let tts = await ensureEma({
-    onProgress: opts.onProgress,
-    precision: 'fp32',
-    forceBackend: 'wasm',
-  })
+  let tts = await ensureEma({ onProgress: opts.onProgress })
   if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-
-  opts.onSynthProgress?.({
-    phase: 'synthesizing',
-    label: 'Ses üretiliyor…',
-  })
 
   try {
     return await runStream(tts, trimmed, opts)
@@ -307,19 +328,17 @@ export async function synthesizeEmaWav(
     ) {
       throw err
     }
-    if (!isRecoverableInferenceError(err) && lastBackend === 'wasm') {
-      throw err
-    }
+    if (lastBackend !== 'webgpu' || !isGpuInferenceError(err)) throw err
+
     await resetEma()
     tts = await ensureEma({
       onProgress: opts.onProgress,
-      precision: 'fp32',
       forceBackend: 'wasm',
     })
     if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     opts.onSynthProgress?.({
       phase: 'synthesizing',
-      label: 'Ses üretiliyor (yeniden)…',
+      label: 'Ses üretiliyor (CPU)…',
     })
     return runStream(tts, trimmed, opts)
   }

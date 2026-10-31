@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   downloadBlob,
+  EMA_SOFT_CHAR_LIMIT,
   ensureEma,
   isEmaReady,
-  resetEma,
   safeDownloadName,
+  softTrimForEma,
   synthesizeEmaWav,
-  getEmaBackend,
   type EmaLoadProgress,
   type EmaTimingTrack,
 } from '@/lib/emaEngine'
@@ -34,16 +34,17 @@ type Phase =
 
 /**
  * In-browser Turkish TTS (EMA Lightning ONNX) + word-timing karaoke.
- * Text never leaves the device; weights cache in Cache Storage after first fetch.
+ * Model + inference run in a Web Worker so the page stays interactive.
  */
 export default function EmaTts({
   initialText = '',
   title = 'ses',
   compact = false,
-  preload = true,
+  preload = false,
   className = '',
 }: Props) {
   const [text, setText] = useState(initialText)
+  const [useFullText, setUseFullText] = useState(false)
   const [phase, setPhase] = useState<Phase>(() =>
     isEmaReady() ? 'ready' : 'idle',
   )
@@ -58,9 +59,21 @@ export default function EmaTts({
   const abortRef = useRef<AbortController | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const wordRefs = useRef<(HTMLSpanElement | null)[]>([])
+  const timingsRef = useRef<EmaTimingTrack | null>(null)
+
+  useEffect(() => {
+    timingsRef.current = timings
+  }, [timings])
+
+  const trimmedPlan = useMemo(() => {
+    const raw = text.trim()
+    if (useFullText) return { text: raw, truncated: false }
+    return softTrimForEma(raw, EMA_SOFT_CHAR_LIMIT)
+  }, [text, useFullText])
 
   useEffect(() => {
     setText(initialText)
+    setUseFullText(false)
   }, [initialText])
 
   useEffect(() => {
@@ -72,13 +85,6 @@ export default function EmaTts({
   }, [])
 
   useEffect(() => {
-    // Previous WebGPU sessions in this tab break synth — drop them once.
-    if (getEmaBackend() === 'webgpu') {
-      void resetEma()
-    }
-  }, [])
-
-  useEffect(() => {
     if (!preload || isEmaReady()) {
       if (isEmaReady()) setPhase('ready')
       return
@@ -87,7 +93,6 @@ export default function EmaTts({
     setPhase('loading')
     setError(null)
     ensureEma({
-      forceBackend: 'wasm',
       onProgress: (p) => {
         if (!cancelled) setProgress(p)
       },
@@ -109,7 +114,6 @@ export default function EmaTts({
     }
   }, [preload])
 
-  // Sync karaoke highlight to <audio> clock
   useEffect(() => {
     const el = audioRef.current
     const words = timings?.words
@@ -170,11 +174,7 @@ export default function EmaTts({
     setPhase('loading')
     setError(null)
     try {
-      if (getEmaBackend() === 'webgpu') await resetEma()
-      await ensureEma({
-        forceBackend: 'wasm',
-        onProgress: setProgress,
-      })
+      await ensureEma({ onProgress: setProgress })
       setPhase('ready')
       setProgress(null)
     } catch {
@@ -186,7 +186,7 @@ export default function EmaTts({
   }
 
   async function convert() {
-    const body = text.trim()
+    const body = trimmedPlan.text
     if (body.length < 2) return
 
     abortRef.current?.abort()
@@ -206,20 +206,31 @@ export default function EmaTts({
     setPhase('synthesizing')
     setError(null)
     try {
-      if (getEmaBackend() === 'webgpu') await resetEma()
       if (!isEmaReady()) {
         setPhase('loading')
         setSynthLabel('Ses modeli hazırlanıyor…')
-        await ensureEma({ forceBackend: 'wasm', onProgress: setProgress })
+        await ensureEma({ onProgress: setProgress })
         setProgress(null)
         setPhase('synthesizing')
       }
-      // Full WAV + timings, then <audio> play so karaoke stays in sync
+      // First-integration behaviour: play chunks as they arrive (don't wait for full WAV)
       const result = await synthesizeEmaWav(body, {
-        play: false,
+        play: true,
         signal: ac.signal,
         onProgress: setProgress,
         onSynthProgress: (p) => setSynthLabel(p.label),
+        onTimings: (t) => {
+          timingsRef.current = t
+          setTimings(t)
+        },
+        onClock: (sec) => {
+          setActiveWord((prev) => {
+            const words = timingsRef.current?.words
+            if (!words?.length) return prev
+            const idx = wordIndexAtTime(words, sec)
+            return idx === prev ? prev : idx
+          })
+        },
       })
       if (ac.signal.aborted) return
       const url = URL.createObjectURL(result.blob)
@@ -229,12 +240,6 @@ export default function EmaTts({
       setTimingsJson(result.timingsJson)
       setSynthLabel(null)
       setPhase('done')
-      window.setTimeout(() => {
-        const a = audioRef.current
-        if (!a) return
-        a.currentTime = 0
-        void a.play().catch(() => {})
-      }, 80)
     } catch (err) {
       setSynthLabel(null)
       if ((err as DOMException)?.name === 'AbortError') {
@@ -244,7 +249,7 @@ export default function EmaTts({
       setPhase('error')
       const msg = err instanceof Error ? err.message : String(err)
       setError(
-        /fetch|HTTP|network|Failed to fetch|load|Cache/i.test(msg)
+        /fetch|HTTP|network|Failed to fetch|load|Cache|worker/i.test(msg)
           ? 'Model yüklenemedi, lütfen internet bağlantınızı kontrol edip tekrar deneyin'
           : msg || 'Ses üretilemedi',
       )
@@ -285,6 +290,8 @@ export default function EmaTts({
     : phase === 'loading'
       ? 5
       : 0
+  const wouldTruncate =
+    !useFullText && text.trim().length > EMA_SOFT_CHAR_LIMIT
 
   return (
     <div
@@ -294,14 +301,15 @@ export default function EmaTts({
         <>
           <p className="section-label mb-0.5">Türkçe ses (EMA)</p>
           <p className="muted text-sm leading-relaxed mb-2">
-            Metin cihazınızda sese dönüşür; sunucuya gönderilmez. İlk yüklemede
-            ~36 MB model iner, sonra tarayıcı önbelleğinden açılır.
+            WebGPU ile hızlı üretim (ilk kurulumdaki gibi); olmazsa CPU’ya
+            düşer. İlk seferde ~36 MB iner, sonra önbellekten açılır. Metin
+            sunucuya gitmez.
           </p>
         </>
       ) : (
         <p className="muted text-xs leading-relaxed mb-1.5">
-          Kaliteli Türkçe ses + kelime zamanları: model tarayıcıda çalışır.
-          Sunucuya metin gitmez.
+          WebGPU hızı hedeflenir; ilk model ~36 MB. Uzun metinde varsayılan kısa
+          kesit kullanılır.
         </p>
       )}
 
@@ -314,6 +322,21 @@ export default function EmaTts({
         disabled={busy}
         aria-label="TTS metni"
       />
+
+      {wouldTruncate ? (
+        <label className="ema-tts__trim muted text-xs">
+          <input
+            type="checkbox"
+            checked={useFullText}
+            disabled={busy}
+            onChange={(e) => setUseFullText(e.target.checked)}
+          />
+          <span>
+            Varsayılan: ilk ~{EMA_SOFT_CHAR_LIMIT} karakter (akıcı deneyim).
+            Tüm metni üretmek için işaretle — uzun sürer, cihazı yorar.
+          </span>
+        </label>
+      ) : null}
 
       {phase === 'loading' || phase === 'synthesizing' ? (
         <div className="ema-tts__progress" role="status" aria-live="polite">
@@ -336,8 +359,8 @@ export default function EmaTts({
           </p>
           <p className="muted text-[11px] mb-0">
             {phase === 'synthesizing'
-              ? 'Uzun ders metinleri birkaç dakika sürebilir; kelime vurgusu ses bitince açılır.'
-              : 'İlk seferde ~36 MB iner; sonra tarayıcı önbelleğinden açılır.'}
+              ? 'Ses üretilirken çalmaya başlar; kelimeler eşzamanlı aydınlanır.'
+              : 'Model bir kez iner; sonraki açılışlar önbellekten hızlıdır.'}
           </p>
         </div>
       ) : null}
@@ -358,7 +381,7 @@ export default function EmaTts({
             Modeli hazırla
           </button>
         ) : null}
-        {phase === 'synthesizing' ? (
+        {phase === 'synthesizing' || phase === 'loading' ? (
           <button type="button" className="btn-ghost text-sm" onClick={stop}>
             İptal
           </button>
@@ -366,10 +389,10 @@ export default function EmaTts({
           <button
             type="button"
             className="btn-primary text-sm"
-            disabled={busy || text.trim().length < 2}
+            disabled={busy || trimmedPlan.text.length < 2}
             onClick={() => void convert()}
           >
-            {busy ? 'Üretiliyor…' : 'Sese dönüştür'}
+            Sese dönüştür
           </button>
         )}
         {wavBlob ? (

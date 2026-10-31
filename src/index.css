@@ -7309,6 +7309,19 @@ textarea {
   gap: 0.45rem;
 }
 
+.ema-tts__trim {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.ema-tts__trim input {
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+}
+
 .ema-tts__progress {
   display: flex;
   flex-direction: column;

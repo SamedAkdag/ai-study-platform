@@ -191,12 +191,17 @@ export class EMA {
   static async load(backend = "webgpu", base = "models/", onProgress = () => {}, precision = "fp32") {
     ort = await import(/* @vite-ignore */ ORT + (backend === "webgpu" ? "ort.webgpu.min.mjs" : "ort.wasm.min.mjs"));
     ort.env.wasm.wasmPaths = ORT;
-    // Keep proxy off: ORT's wasm worker often fails under Vite (broken synth, empty UI).
-    try { ort.env.wasm.proxy = false; } catch {}
+    // Proxy off under Vite; crank WASM threads when GPU path is unavailable.
+    try {
+      ort.env.wasm.proxy = false;
+      const cores = typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 2 : 2;
+      ort.env.wasm.numThreads = Math.max(1, Math.min(4, cores));
+      ort.env.wasm.simd = true;
+    } catch {}
     const meta = await (await fetch(base + "meta.json")).json();
-    // Prefer a single EP. WebGPU+fp32 graphs still Cast to f16 on many devices and blow up at OrtRun.
+    // Match upstream demo: WebGPU first, WASM listed as EP fallback inside the session.
     const opts = {
-      executionProviders: backend === "webgpu" ? ["webgpu"] : ["wasm"],
+      executionProviders: backend === "webgpu" ? ["webgpu", "wasm"] : ["wasm"],
       graphOptimizationLevel: "all",
     };
     const sessions = {};
