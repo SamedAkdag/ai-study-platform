@@ -1,4 +1,11 @@
-/** Device-local TTS via Web Speech API (works in modern browsers). */
+/** Study TTS: Turkish via in-browser EMA Lightning; other langs fall back to Web Speech. */
+
+import {
+  pauseEmaSpeak,
+  resumeEmaSpeak,
+  speakEmaText,
+  stopEmaSpeak,
+} from '@/lib/emaSpeak'
 
 export type TtsStatus = 'idle' | 'speaking' | 'paused' | 'unsupported'
 
@@ -22,7 +29,17 @@ export const TTS_LANG_OPTIONS: { code: string; label: string }[] = [
 ]
 
 export function isTtsSupported() {
-  return typeof window !== 'undefined' && 'speechSynthesis' in window
+  if (typeof window === 'undefined') return false
+  const hasAudio =
+    'AudioContext' in window ||
+    'webkitAudioContext' in
+      (window as unknown as { webkitAudioContext?: unknown })
+  const hasWasm = typeof WebAssembly !== 'undefined'
+  return (hasAudio && hasWasm) || 'speechSynthesis' in window
+}
+
+export function usesEmaVoice(lang?: string) {
+  return langPrefix(lang || getStoredLang() || DEFAULT_TTS_LANG) === 'tr'
 }
 
 /** Strip markdown so TTS reads clean study text. */
@@ -187,18 +204,24 @@ let queueToken = 0
 
 export function stopSpeech() {
   queueToken += 1
-  if (!isTtsSupported()) return
-  window.speechSynthesis.cancel()
+  stopEmaSpeak()
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel()
+  }
 }
 
 export function pauseSpeech() {
-  if (!isTtsSupported()) return
-  window.speechSynthesis.pause()
+  pauseEmaSpeak()
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.pause()
+  }
 }
 
 export function resumeSpeech() {
-  if (!isTtsSupported()) return
-  window.speechSynthesis.resume()
+  resumeEmaSpeak()
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.resume()
+  }
 }
 
 export function speakText(
@@ -216,6 +239,27 @@ export function speakText(
   }
 
   stopSpeech()
+  const lang = opts.lang || getStoredLang() || DEFAULT_TTS_LANG
+  const rate = opts.rate ?? getStoredRate()
+
+  // Default study path: in-browser EMA (Turkish neural TTS)
+  if (usesEmaVoice(lang)) {
+    speakEmaText(text, {
+      rate,
+      onStatus: opts.onStatus,
+      onChunk: opts.onChunk,
+      onEnd: opts.onEnd,
+      onError: opts.onError,
+    })
+    return
+  }
+
+  if (!('speechSynthesis' in window)) {
+    opts.onError?.('Bu dil için tarayıcı TTS yok')
+    opts.onStatus?.('unsupported')
+    return
+  }
+
   const myToken = queueToken
   const chunks = splitForSpeech(text)
   if (!chunks.length) {
@@ -224,15 +268,12 @@ export function speakText(
     return
   }
 
-  const lang = opts.lang || getStoredLang() || DEFAULT_TTS_LANG
   const voices = listVoices()
   const voice = pickVoice(
     voices,
     opts.voiceUri || getStoredVoiceUri(),
     lang,
   )
-  // Never force an English voice when Turkish is selected but TR pack is missing
-  const rate = opts.rate ?? getStoredRate()
   let i = 0
 
   const speakNext = () => {

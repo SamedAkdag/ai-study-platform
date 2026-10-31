@@ -5,6 +5,10 @@
  */
 import { EMA, wavBlob, RATE } from '@/lib/ema/tts.js'
 import {
+  createEmaChunkPlayer,
+  type EmaChunkPlayer,
+} from '@/lib/emaAudioPlayer'
+import {
   createTimingCollector,
   timingsToJson,
   type EmaTimingTrack,
@@ -69,7 +73,7 @@ function preferWasmOnly(): boolean {
   const ua = navigator.userAgent || ''
   if (/iPhone|iPad|iPod/i.test(ua)) return true
   if (/Safari/i.test(ua) && !/Chrome|Chromium|Edg/i.test(ua)) return true
-  return typeof navigator.gpu === 'undefined'
+  return typeof (navigator as Navigator & { gpu?: unknown }).gpu === 'undefined'
 }
 
 async function loadBackend(
@@ -165,51 +169,7 @@ export function softTrimForEma(
   return { text: body, truncated: true }
 }
 
-/** Gapless-ish WebAudio player — same idea as the first working demo. */
-export function createChunkPlayer(sampleRate = RATE) {
-  const Ctx =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext: typeof AudioContext })
-      .webkitAudioContext
-  const ctx = new Ctx({ sampleRate })
-  let next = 0
-  let origin: number | null = null
-  let stopped = false
-
-  return {
-    ctx,
-    async resume() {
-      if (ctx.state === 'suspended') await ctx.resume()
-    },
-    play(samples: Float32Array) {
-      if (stopped || !samples.length) return
-      const copy =
-        samples instanceof Float32Array ? samples : new Float32Array(samples)
-      const buffer = ctx.createBuffer(1, copy.length, sampleRate)
-      buffer.copyToChannel(copy, 0)
-      const src = ctx.createBufferSource()
-      src.buffer = buffer
-      src.connect(ctx.destination)
-      const t = Math.max(ctx.currentTime, next)
-      if (origin == null) origin = t
-      src.start(t)
-      next = t + buffer.duration
-    },
-    /** Seconds since first scheduled sample (for live karaoke). */
-    currentTime() {
-      if (origin == null) return 0
-      return Math.max(0, ctx.currentTime - origin)
-    },
-    /** AudioContext time when the queued buffer ends. */
-    queuedUntil() {
-      return next
-    },
-    stop() {
-      stopped = true
-      void ctx.close().catch(() => {})
-    },
-  }
-}
+export { createEmaChunkPlayer }
 
 async function runStream(
   tts: InstanceType<typeof EMA>,
@@ -219,6 +179,8 @@ async function runStream(
     seed?: number
     signal?: AbortSignal
     play?: boolean
+    shouldPause?: () => boolean
+    onPlayer?: (player: EmaChunkPlayer) => void
     onSynthProgress?: (p: EmaSynthProgress) => void
     onTimings?: (t: EmaTimingTrack) => void
     onClock?: (seconds: number) => void
@@ -229,9 +191,11 @@ async function runStream(
   let pcm = 0
   let piece = 0
 
-  // Stream to speakers immediately (first-integration UX)
-  const player = opts.play !== false ? createChunkPlayer(RATE) : null
-  if (player) await player.resume()
+  const player = opts.play !== false ? createEmaChunkPlayer(RATE) : null
+  if (player) {
+    await player.resume()
+    opts.onPlayer?.(player)
+  }
 
   let clockRaf = 0
   const tickClock = () => {
@@ -253,7 +217,6 @@ async function runStream(
       onPiece: (info) => {
         piece += 1
         collector.onPiece(info)
-        // Partial timings for live highlight while audio is already playing
         opts.onTimings?.(collector.finalize(pcm || 1))
         opts.onSynthProgress?.({
           phase: 'synthesizing',
@@ -263,6 +226,12 @@ async function runStream(
       },
     })) {
       if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      while (opts.shouldPause?.()) {
+        await new Promise((r) => setTimeout(r, 80))
+        if (opts.signal?.aborted) {
+          throw new DOMException('Aborted', 'AbortError')
+        }
+      }
       chunks.push(audio)
       pcm += audio.length
       player?.play(audio)
@@ -274,7 +243,6 @@ async function runStream(
   }
 
   if (clockRaf) cancelAnimationFrame(clockRaf)
-  // Keep AudioContext alive until scheduled buffers finish
   if (player) {
     const remainingMs = Math.max(
       0,
@@ -309,6 +277,8 @@ export async function synthesizeEmaWav(
     onSynthProgress?: (p: EmaSynthProgress) => void
     onTimings?: (t: EmaTimingTrack) => void
     onClock?: (seconds: number) => void
+    shouldPause?: () => boolean
+    onPlayer?: (player: EmaChunkPlayer) => void
     /** Default true — play while generating (original fast feel). */
     play?: boolean
   } = {},

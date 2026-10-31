@@ -1,5 +1,5 @@
 import type { useTts } from '@/hooks/useTts'
-import { TTS_LANG_OPTIONS, langPrefix } from '@/lib/tts'
+import { TTS_LANG_OPTIONS, langPrefix, usesEmaVoice } from '@/lib/tts'
 
 type TtsApi = ReturnType<typeof useTts>
 
@@ -19,14 +19,15 @@ export default function TtsControls({
   if (!tts.supported) {
     return (
       <p className="muted text-xs">
-        Bu tarayıcıda yerel sesli okuma (TTS) yok.
+        Bu tarayıcıda sesli okuma desteklenmiyor.
       </p>
     )
   }
 
   const busy = tts.status === 'speaking' || tts.status === 'paused'
+  const ema = usesEmaVoice(tts.lang)
   const isTr = langPrefix(tts.lang) === 'tr'
-  const noVoicesForLang = tts.voices.length === 0
+  const noVoicesForLang = !ema && tts.voices.length === 0
 
   return (
     <div className="space-y-2">
@@ -101,7 +102,9 @@ export default function TtsControls({
           </span>
         </label>
 
-        {tts.voices.length > 0 ? (
+        {ema ? (
+          <span className="muted text-[11px]">Ses · EMA Türkçe</span>
+        ) : tts.voices.length > 0 ? (
           <label className="muted flex items-center gap-1.5 text-[11px] font-semibold">
             Ses
             <select
@@ -132,10 +135,15 @@ export default function TtsControls({
         )}
       </div>
 
+      {ema ? (
+        <p className="muted text-[11px] leading-relaxed">
+          Türkçe okuma cihazda EMA ile üretilir; metin sunucuya gitmez. İlk
+          seferde ses modeli iner.
+        </p>
+      ) : null}
       {noVoicesForLang && isTr && (
         <p className="muted text-[11px] leading-relaxed">
-          Türkçe konuşmacı bulunamadı. Windows’ta Konuşma dil paketini yükle;
-          yine de tr-TR ile denenecek.
+          Türkçe konuşmacı bulunamadı.
         </p>
       )}
       {noVoicesForLang && !isTr && (

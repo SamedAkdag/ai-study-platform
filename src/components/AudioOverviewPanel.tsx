@@ -10,8 +10,6 @@ import {
   getStoredLang,
   getStoredRate,
   isTtsSupported,
-  listVoices,
-  pickVoice,
   speakText,
   stopSpeech,
   type TtsStatus,
@@ -42,7 +40,6 @@ export default function AudioOverviewPanel({
 }: Props) {
   const [open, setOpen] = useState(defaultOpen)
   const [playing, setPlaying] = useState(false)
-  const [turnIndex, setTurnIndex] = useState(0)
   const [status, setStatus] = useState<TtsStatus>(
     isTtsSupported() ? 'idle' : 'unsupported',
   )
@@ -66,7 +63,6 @@ export default function AudioOverviewPanel({
   useEffect(() => {
     const cached = loadCachedAudioOverview(inputKey)
     setScript(cached && cached.narration.length >= 120 ? cached : fallback)
-    setTurnIndex(0)
     stop()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when unit changes
   }, [title, summary, markdown, fallback])
@@ -76,7 +72,6 @@ export default function AudioOverviewPanel({
       generateAudioOverview({ ...inputKey, force }),
     onSuccess: (next) => {
       setScript(next)
-      setTurnIndex(0)
     },
   })
 
@@ -99,49 +94,29 @@ export default function AudioOverviewPanel({
     }
   }, [])
 
-  function teacherVoice(): string | undefined {
-    const voices = listVoices()
-    const lang = getStoredLang()
-    const pool = voices.filter((v) =>
-      (v.lang || '')
-        .toLowerCase()
-        .startsWith(lang.split(/[-_]/)[0]!.toLowerCase()),
-    )
-    return pool[0]?.voiceURI ?? pickVoice(voices, undefined, lang)?.voiceURI
-  }
-
-  function playFrom(startAt: number) {
+  function playFrom(_startAt = 0) {
     if (!isTtsSupported()) return
     cancelRef.current = false
     setPlaying(true)
-    setTurnIndex(startAt)
-
-    const turns = script.turns
-    const run = (i: number) => {
-      if (cancelRef.current || i >= turns.length) {
+    stopSpeech()
+    // Full narration via EMA (single stream) — lighter than turn-by-turn Google TTS
+    speakText(script.narration, {
+      rate: getStoredRate() * 0.96,
+      lang: getStoredLang(),
+      onStatus: (s) => {
+        setStatus(s)
+        if (s === 'idle' && !cancelRef.current) setPlaying(false)
+      },
+      onEnd: () => {
+        if (cancelRef.current) return
         setPlaying(false)
         setStatus('idle')
-        return
-      }
-      setTurnIndex(i)
-      speakText(turns[i]!.text, {
-        rate: getStoredRate() * 0.96,
-        lang: getStoredLang(),
-        voiceUri: teacherVoice(),
-        onStatus: setStatus,
-        onEnd: () => {
-          if (cancelRef.current) return
-          run(i + 1)
-        },
-        onError: () => {
-          setPlaying(false)
-          setStatus('idle')
-        },
-      })
-    }
-
-    stopSpeech()
-    window.setTimeout(() => run(startAt), 80)
+      },
+      onError: () => {
+        setPlaying(false)
+        setStatus('idle')
+      },
+    })
   }
 
   function stop() {
@@ -200,15 +175,6 @@ export default function AudioOverviewPanel({
                 Dersi dinle
               </button>
             )}
-            {!playing && turnIndex > 0 ? (
-              <button
-                type="button"
-                className="btn-ghost text-sm"
-                onClick={() => playFrom(turnIndex)}
-              >
-                Kaldığı yerden
-              </button>
-            ) : null}
             <button
               type="button"
               className="btn-ghost text-sm"
