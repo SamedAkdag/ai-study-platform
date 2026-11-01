@@ -656,6 +656,11 @@ export async function askAboutSelection(input: {
   imageDataUrl?: string
   /** When true, image_url is required (chart marquee). */
   requireImage?: boolean
+  /**
+   * lecture = spoken classroom monologue (Dinle / harita turu “Hocaya sor”)
+   * notes = default selection-tutor markdown-friendly answer
+   */
+  answerFormat?: 'lecture' | 'notes'
 }) {
   const imageUrl = (input.imageDataUrl || '').trim()
   if (input.requireImage && !imageUrl.startsWith('data:image/')) {
@@ -675,6 +680,7 @@ export async function askAboutSelection(input: {
       history: input.history,
       image_url: imageUrl,
       vision: !!imageUrl,
+      answer_format: input.answerFormat || 'notes',
     },
   })
 

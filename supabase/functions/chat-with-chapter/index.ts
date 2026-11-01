@@ -11,7 +11,10 @@ import {
   recordUsage,
   resolveBookContext,
 } from '../_shared/aiUsage.ts'
-import { selectionTutorSystem } from '../_shared/pedagogy.ts'
+import {
+  lectureTutorSystem,
+  selectionTutorSystem,
+} from '../_shared/pedagogy.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -47,6 +50,10 @@ serve(async (req) => {
         ? body.image_url.trim()
         : ''
     const history = (Array.isArray(body?.history) ? body.history : []) as HistoryItem[]
+    const answerFormat =
+      body?.answer_format === 'lecture' || body?.format === 'lecture'
+        ? 'lecture'
+        : 'notes'
 
     const hasImage =
       imageUrl.startsWith('data:image/') ||
@@ -84,7 +91,10 @@ serve(async (req) => {
       )
     }
 
-    const system = selectionTutorSystem(chapterTitle)
+    const lectureMode = answerFormat === 'lecture' && !hasImage
+    const system = lectureMode
+      ? lectureTutorSystem(chapterTitle)
+      : selectionTutorSystem(chapterTitle)
 
     const contextBlock = hasImage
       ? `Öğrenci PDF sayfasından bir GRAFİK/ŞEKİL kırptı. Asıl kaynak EKTEKİ GÖRÜNTÜDÜR (image).
@@ -96,7 +106,18 @@ ${precedingContext || '(yok)'}
 
 GRAFİK ALTI (~ilk 10 cümle):
 ${followingContext || '(yok)'}`
-      : `YAKIN METİN (SEÇİMDEN ÖNCE):
+      : lectureMode
+        ? `ANLATIM BAĞLAMI (HOCANIN ŞU AN ANLATTIĞI DÜĞÜM / ÖNCE–SONRA):
+
+ÖNCEKİ ANLATIM:
+${precedingContext || '(yok)'}
+
+ŞU ANKİ ANLATIM:
+${cleanText}
+
+SONRAKİ ANLATIM:
+${followingContext || '(yok)'}`
+        : `YAKIN METİN (SEÇİMDEN ÖNCE):
 ${precedingContext || '(yok)'}
 
 SEÇİLİ PASAJ:
@@ -112,7 +133,13 @@ ${followingContext || '(yok)'}`
 ZORUNLU: Ekteki görüntüyü incele. Eksen adları, birimler, eğri/çubuk şekilleri, okunabilen değerler.
 Görüntüdeki içeriği tarif et; genel “grafik nasıl okunur” dersi VERME.
 Okuyamadığın sayıyı uydurma. Öğretici, kısa, mümkünse mini tablo.`
-      : `Bu bir ders çalışması sorusudur.
+      : lectureMode
+        ? `İstenen: TEK SÜREKLİ HOCA ANLATIMI — ton ders gibi (Dinle sekmesindeki hoca anlatımı ile AYNI üslup).
+Öğrenci harita turunda araya girdi. Sorusu: ${question}
+
+Bağlamdaki anlatıma dayan; uydurma. Tablo/madde/markdown yazma — sadece konuşma.
+İstersen sonunda “şimdi derse kaldığımız yerden devam edebiliriz” de.`
+        : `Bu bir ders çalışması sorusudur.
 Öğrencinin sorusu: ${question}
 
 Seçili pasaja ve yakın bağlama göre öğretici cevap ver. Gerekirse bir benzetme ekle; metinde olmayanı uydurma.`
@@ -155,22 +182,30 @@ Seçili pasaja ve yakın bağlama göre öğretici cevap ver. Gerekirse bir benz
       usage = result.usage
       provider = 'mimo'
     } else {
+      // Lecture interrupt: smaller history + tighter maxTokens → faster completion
+      const histN = lectureMode ? 4 : 8
+      const maxTokens = lectureMode ? 480 : 900
+      const temperature = lectureMode ? 0.35 : 0.4
       const messages = [
         { role: 'system' as const, content: system },
         {
           role: 'user' as const,
-          content: `${contextBlock}\n\n(Bu ders notu bağlamını kullan.)`,
+          content: lectureMode
+            ? `${contextBlock}\n\n(Bu anlatım bağlamını kullan.)`
+            : `${contextBlock}\n\n(Bu ders notu bağlamını kullan.)`,
         },
-        ...history.slice(-8).map((h) => ({
+        ...history.slice(-histN).map((h) => ({
           role: h.role as 'user' | 'assistant',
-          content: h.content,
+          content: lectureMode
+            ? h.content.slice(0, 900)
+            : h.content,
         })),
         { role: 'user' as const, content: framedQuestion },
       ]
       const result = await llmComplete({
         messages,
-        temperature: 0.4,
-        maxTokens: 900,
+        temperature,
+        maxTokens,
       })
       answer = result.text
       usage = result.usage
@@ -180,29 +215,39 @@ Seçili pasaja ve yakın bağlama göre öğretici cevap ver. Gerekirse bir benz
     const usageBag = createUsageBag()
     recordUsage(usageBag, usage, provider)
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-    if (supabaseUrl && serviceKey && chapterId) {
-      try {
-        const admin = createClient(supabaseUrl, serviceKey)
-        const bookCtx = await resolveBookContext(admin, chapterId)
-        await logAiUsage(admin, {
-          operation: hasImage ? 'chapter_chat_vision' : 'chapter_chat',
-          bookId: bookCtx.bookId,
-          chapterId,
-          userId: bookCtx.userId,
-          bag: usageBag,
-        })
-      } catch (logErr) {
-        console.warn('chat usage log skipped', logErr)
-      }
-    }
-
     const usagePayload = {
       prompt_tokens: usage.prompt_tokens,
       completion_tokens: usage.completion_tokens,
       total_tokens: usage.total_tokens,
       estimated: usage.estimated,
+    }
+
+    // Log AFTER answering — don't block the student on DB usage writes
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    if (supabaseUrl && serviceKey && chapterId) {
+      const logTask = (async () => {
+        try {
+          const admin = createClient(supabaseUrl, serviceKey)
+          const bookCtx = await resolveBookContext(admin, chapterId)
+          await logAiUsage(admin, {
+            operation: hasImage ? 'chapter_chat_vision' : 'chapter_chat',
+            bookId: bookCtx.bookId,
+            chapterId,
+            userId: bookCtx.userId,
+            bag: usageBag,
+          })
+        } catch (logErr) {
+          console.warn('chat usage log skipped', logErr)
+        }
+      })()
+      const edgeWait = (
+        globalThis as {
+          EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void }
+        }
+      ).EdgeRuntime?.waitUntil
+      if (typeof edgeWait === 'function') edgeWait(logTask)
+      else void logTask
     }
 
     if (/high risk|rejected because/i.test(answer)) {

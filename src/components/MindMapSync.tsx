@@ -73,16 +73,23 @@ export function lessonEdgeHighlight(
   return edgeId === `e-c-${m[1]}` || edgeId === `e-${m[1]}-${m[2]}`
 }
 
-function targetZoom(camera: LessonCamera, coarse?: boolean): number {
-  if (camera === 'leaf') return coarse ? 1.15 : 1.32
-  if (camera === 'branch') return coarse ? 0.92 : 1.05
-  return coarse ? 0.7 : 0.78
+/** Tight cinematic zooms — tree fills the stage, not empty paper. */
+function frameMaxZoom(camera: LessonCamera, coarse?: boolean): number {
+  if (camera === 'leaf') return coarse ? 1.55 : 1.85
+  if (camera === 'branch') return coarse ? 1.22 : 1.42
+  return coarse ? 0.92 : 1.05
+}
+
+function framePadding(camera: LessonCamera, coarse?: boolean): number {
+  // Extra pad on leaf/branch so the reading bubble still fits beside the node
+  if (camera === 'leaf') return coarse ? 0.26 : 0.2
+  if (camera === 'branch') return coarse ? 0.18 : 0.14
+  return coarse ? 0.12 : 0.08
 }
 
 /**
- * Always fly the viewport to the spoken node (works even after the user
- * panned elsewhere). Keeps enough zoom-out that the map still reads.
- * Returns a cancel fn for deferred retries.
+ * Always fly the viewport so framed tree nodes fill the stage.
+ * Leaves room on the right for the speech bubble when zoomed in.
  */
 export function fitLessonFrame(
   rf: ReactFlowInstance | null,
@@ -99,50 +106,50 @@ export function fitLessonFrame(
   const focusId =
     opts.focusId && rf.getNode(opts.focusId) ? opts.focusId : null
   const focus = focusId ? rf.getNode(focusId) : null
-  const zoom = targetZoom(opts.camera, opts.coarse)
+  const maxZoom = frameMaxZoom(opts.camera, opts.coarse)
+  const padding = framePadding(opts.camera, opts.coarse)
   const duration = 700
 
-  // Hub / no focus → overview of the provided frame
-  if (opts.camera === 'hub' || !focus) {
-    const present = opts.nodeIds.filter((id) => rf.getNode(id))
-    const fitIds = present.length
-      ? present
+  const present = opts.nodeIds.filter((id) => rf.getNode(id))
+  const fitIds = present.length
+    ? present
+    : focusId
+      ? [focusId]
       : rf.getNodes().map((n) => n.id)
-    if (!fitIds.length) return noop
-    void rf.fitView({
-      nodes: fitIds.map((id) => ({ id })),
-      padding: opts.coarse ? 0.2 : 0.15,
-      includeHiddenNodes: false,
-      minZoom: 0.32,
-      maxZoom: 0.82,
-      duration,
-    })
-    return noop
-  }
+  if (!fitIds.length) return noop
 
-  // Direct fly-to the spoken node — reliable after user pan
-  const w = focus.measured?.width ?? 160
-  const h = focus.measured?.height ?? 48
-  const cx = focus.position.x + w / 2
-  const cy = focus.position.y + h / 2
-  // Shift center right in flow-space ≈ node sits left-of-screen for bubble
-  const shiftX = (opts.coarse ? 70 : 100) / zoom
+  // Fit the spoken cluster so it occupies most of the viewport
+  void rf.fitView({
+    nodes: fitIds.map((id) => ({ id })),
+    padding,
+    includeHiddenNodes: false,
+    minZoom: 0.35,
+    maxZoom,
+    duration,
+  })
 
-  void rf.setCenter(cx + shiftX, cy, { zoom, duration })
+  // After fit settles, bias focus left so the reading cloud sits in the clear
+  if (!focus || opts.camera === 'hub') return noop
 
-  // Retry once if layout hadn't measured the node yet
-  const retry = window.setTimeout(() => {
+  const bias = () => {
     const n = focusId ? rf.getNode(focusId) : null
     if (!n) return
-    const nw = n.measured?.width ?? w
-    const nh = n.measured?.height ?? h
+    const nw = n.measured?.width ?? 160
+    const nh = n.measured?.height ?? 48
+    const zoom = Math.min(maxZoom, Math.max(rf.getZoom(), maxZoom * 0.72))
+    const shiftX = (opts.coarse ? 72 : 110) / zoom
     void rf.setCenter(n.position.x + nw / 2 + shiftX, n.position.y + nh / 2, {
       zoom,
-      duration: 450,
+      duration: 420,
     })
-  }, 280)
+  }
 
-  return () => window.clearTimeout(retry)
+  const t1 = window.setTimeout(bias, 320)
+  const t2 = window.setTimeout(bias, 780)
+  return () => {
+    window.clearTimeout(t1)
+    window.clearTimeout(t2)
+  }
 }
 
 export function lessonOpenIdsForNode(

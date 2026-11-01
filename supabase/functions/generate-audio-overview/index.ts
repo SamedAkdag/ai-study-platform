@@ -4,7 +4,10 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { llmCompleteJson } from '../_shared/llm.ts'
 import { getMimoConfig } from '../_shared/mimo.ts'
-import { TUTOR_PERSONA_TR } from '../_shared/pedagogy.ts'
+import {
+  LECTURE_SPEECH_PERSONA_TR,
+  LECTURE_SPEECH_STYLE_TR,
+} from '../_shared/pedagogy.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -69,27 +72,13 @@ serve(async (req) => {
             .join('\n\n')
         : '(ayrı konu paketi yok — aşağıdaki ham notu kullan)'
 
-    const system = `${TUTOR_PERSONA_TR}
+    const system = `${LECTURE_SPEECH_PERSONA_TR}
 
-Görevin: Kaynak notlardan TEK PARÇA, SÜREKLİ, DETAYLI bir DERS ANLATIMI yazmak.
-Dinleyen kişi “şu an bir hoca sınıfta ders anlatıyor” demeli — hem ton doğru, hem İÇERİK ZENGİN.
+${LECTURE_SPEECH_STYLE_TR}
 
 DETAY STRATEJİSİ (çok önemli):
 - Sana "Konu 1… Konu N" paketleri geliyorsa her konuyu SIRAYLA ve DERİN işle.
-- Her konu için konuşurken şunları geç (başlık yazmadan, konuşarak):
-  1) Tanım / ne olduğunu kendi cümlelerinle
-  2) Neden önemli (sınav / uygulama)
-  3) Kaynaktaki somut detay — en az 4–7 cümle; özetleyip geçme, kaynağın etini kullan
-  4) Mini örnek, benzetme veya "burada sık düşülüyor" tuzağı
-- Konular arasında doğal geçiş cümlesi kullan ("Şimdi şuraya geliyoruz…").
-- Kaynakta olmayan bilgi uydurma; emin değilsen "notlarda net değil" de.
-- Formülü konuşma diliyle söyle (ham LaTeX yazma).
-
-TON:
-- "Bakın…", "Dikkat edin…", "Şimdi şunu netleştirelim…", "Örnek veriyorum…"
-- ÖZET DEĞİL. Madde listesi, blog başlığı, "##", "Bölüm 1", podcast, diyalog YASAK.
-
-UZUNLUK:
+- Her konu için en az 4–7 cümle somut detay; konular arasında "Şimdi şuraya geliyoruz…" geçişi.
 - narration en az ~3500 karakter (konu sayısı azsa yine zengin anlat; uydurma).
 - Konu çoksa hepsini işle; acele özetleme.
 

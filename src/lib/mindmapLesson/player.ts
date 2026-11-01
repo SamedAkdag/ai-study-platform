@@ -8,6 +8,8 @@ import { wordIndexAtTime, type EmaWordTiming } from '@/lib/emaTimings'
 
 export type LessonPlayerState = {
   playing: boolean
+  /** Waiting for the next EMA segment to finish synthesizing */
+  buffering: boolean
   currentTime: number
   segmentIndex: number
   wordIndex: number
@@ -27,6 +29,7 @@ export function createLessonPlayer() {
   let rate = 1
   let segIndex = 0
   let playing = false
+  let buffering = false
   let raf = 0
   let objectUrl: string | null = null
   let baseOffset = 0
@@ -34,10 +37,13 @@ export function createLessonPlayer() {
   let unlocked = false
   let segments: LessonSegment[] = []
   let words: LessonWord[] = []
+  let emaWords: EmaWordTiming[] = []
   let totalDuration = 0
   let synthDone = false
-  function wordsAsEma(): EmaWordTiming[] {
-    return words.map((w, i) => ({
+  let waitTimer = 0
+
+  function rebuildEmaWords() {
+    emaWords = words.map((w, i) => ({
       word: w.w,
       start: w.s,
       end: w.e,
@@ -47,17 +53,18 @@ export function createLessonPlayer() {
 
   function buildState(): LessonPlayerState {
     const t = currentTime()
-    // Trust the loaded segment index — avoids flicker between absolute-time lookups
     const useSi = Math.max(0, Math.min(segments.length - 1, segIndex))
     const seg = segments[useSi]
-    const wi = wordIndexAtTime(wordsAsEma(), t)
+    const wi = emaWords.length ? wordIndexAtTime(emaWords, t) : -1
     const atEnd =
       synthDone &&
       segments.length > 0 &&
       !playing &&
+      !buffering &&
       t >= Math.max(0, totalDuration - 0.4)
     return {
       playing,
+      buffering,
       currentTime: t,
       segmentIndex: useSi,
       wordIndex: wi,
@@ -85,6 +92,13 @@ export function createLessonPlayer() {
     }
   }
 
+  function clearWait() {
+    if (waitTimer) {
+      window.clearInterval(waitTimer)
+      waitTimer = 0
+    }
+  }
+
   async function loadSegment(i: number, autoplay: boolean) {
     const seg = segments[i]
     if (!seg) return
@@ -95,7 +109,6 @@ export function createLessonPlayer() {
     audio.src = objectUrl
     audio.playbackRate = rate
     audio.load()
-    // Announce focus immediately (map sync) before audio starts
     emit()
     if (autoplay) {
       playing = true
@@ -113,8 +126,8 @@ export function createLessonPlayer() {
     cancelAnimationFrame(raf)
     let lastTick = 0
     const tick = (now: number) => {
-      // ~10 fps UI clock — karaoke + map focus without React thrash
-      if (now - lastTick >= 100) {
+      // ~5 fps is enough for karaoke; React further gates updates
+      if (now - lastTick >= 200) {
         lastTick = now
         emit()
       }
@@ -126,25 +139,31 @@ export function createLessonPlayer() {
   audio.onended = () => {
     const next = segIndex + 1
     if (next < segments.length) {
+      buffering = false
       void loadSegment(next, true)
       return
     }
     if (!synthDone) {
+      // Next node audio still synthesizing — stay in lesson, poll quickly
       playing = false
+      buffering = true
       emit()
-      const wait = window.setInterval(() => {
+      clearWait()
+      waitTimer = window.setInterval(() => {
         if (segIndex + 1 < segments.length) {
-          window.clearInterval(wait)
-          playing = true
+          clearWait()
+          buffering = false
           void loadSegment(segIndex + 1, true)
         } else if (synthDone) {
-          window.clearInterval(wait)
+          clearWait()
+          buffering = false
           playing = false
           emit()
         }
-      }, 120)
+      }, 60)
       return
     }
+    buffering = false
     playing = false
     emit()
   }
@@ -181,12 +200,20 @@ export function createLessonPlayer() {
       segments = tl.segments
       words = tl.words
       totalDuration = tl.totalDuration
+      rebuildEmaWords()
       if (opts?.markDone) synthDone = true
       emit()
     },
     markSynthDone() {
       synthDone = true
       emit()
+    },
+    /** Live playhead for synth backpressure */
+    getPlayheadIndex() {
+      return segIndex
+    },
+    getReadyCount() {
+      return segments.length
     },
     async play() {
       if (!segments.length) return
@@ -204,6 +231,8 @@ export function createLessonPlayer() {
     },
     pause() {
       playing = false
+      buffering = false
+      clearWait()
       audio.pause()
       cancelAnimationFrame(raf)
       emit()
@@ -214,7 +243,8 @@ export function createLessonPlayer() {
       emit()
     },
     async seekSegment(i: number) {
-      const idx = Math.max(0, Math.min(segments.length - 1, i))
+      const idx = Math.max(0, Math.min(Math.max(0, segments.length - 1), i))
+      if (!segments.length) return
       const was = playing
       await loadSegment(idx, was)
     },
@@ -223,27 +253,31 @@ export function createLessonPlayer() {
       if (i >= 0) await this.seekSegment(i)
     },
     async next() {
+      if (segIndex + 1 >= segments.length) return
       await this.seekSegment(segIndex + 1)
       if (playing) await this.play()
     },
     async prev() {
-      await this.seekSegment(segIndex - 1)
+      await this.seekSegment(Math.max(0, segIndex - 1))
       if (playing) await this.play()
     },
     getState(): LessonPlayerState {
       return buildState()
     },
     getTimelineSnapshot(): LessonTimeline {
-      return { totalDuration, words: [...words], segments: [...segments] }
+      return { totalDuration, words, segments }
     },
     destroy() {
       playing = false
+      buffering = false
       audio.pause()
       cancelAnimationFrame(raf)
+      clearWait()
       clearUrl()
       listeners = []
       segments = []
       words = []
+      emaWords = []
     },
   }
 }

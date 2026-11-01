@@ -226,7 +226,7 @@ export default function StudyRightStudio({
     {
       id: 'audio',
       label: 'Dinle',
-      title: 'Podcast veya tam hoca dersi',
+      title: 'Hoca harita turu · düğüm düğüm anlatım',
     },
   ]
   const visibleStudio = showStudio

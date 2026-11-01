@@ -21,7 +21,7 @@ import StudyRightStudio, {
 import MindMapPanel, { mindMapFromConcepts } from '@/components/MindMapPanel'
 import FlashcardStories from '@/components/FlashcardStories'
 import StudyGuidePanel from '@/components/StudyGuidePanel'
-import AudioOverviewPanel from '@/components/AudioOverviewPanel'
+import ListenLessonStudio from '@/components/ListenLessonStudio'
 import GroupChatPanel from '@/components/GroupChatPanel'
 import QuizPlayer from '@/components/QuizPlayer'
 import PracticeMoreBar from '@/components/PracticeMoreBar'
@@ -150,7 +150,10 @@ export default function SharedChapterPage() {
         0
       tryKind('practice', !hasPractice)
     }
-    if (mode === 'read' && readStudio === 'map') {
+    if (
+      mode === 'read' &&
+      (readStudio === 'map' || readStudio === 'audio')
+    ) {
       tryKind('mind_map', !(ch.mind_map?.branches?.length ?? 0))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -406,8 +409,10 @@ export default function SharedChapterPage() {
               aria-label="Konu haritası"
             >
               <MindMapPanel
+                variant="studio"
                 data={mindMap}
                 title={ch.title}
+                chapterId={ch.id}
                 markdown={markdown}
               />
             </section>
@@ -432,16 +437,15 @@ export default function SharedChapterPage() {
             </section>
           ) : null}
 
-          {readStudio === 'audio' ? (
-            <section className="studio-stage" aria-label="Sesli özet">
-              <AudioOverviewPanel
-                title={ch.title}
-                summary={ch.summary}
-                keyConcepts={ch.key_concepts}
-                markdown={markdown}
-                defaultOpen
-              />
-            </section>
+          {readStudio === 'audio' && mindMap ? (
+            <ListenLessonStudio
+              chapterId={ch.id}
+              title={ch.title}
+              summary={ch.summary}
+              keyConcepts={ch.key_concepts}
+              markdown={markdown}
+              mindMap={mindMap}
+            />
           ) : null}
 
           {readStudio === null ? (

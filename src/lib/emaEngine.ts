@@ -296,6 +296,8 @@ async function runStream(
       chunks.push(audio)
       pcm += audio.length
       player?.play(audio)
+      // Yield so React / clicks aren't starved during long WASM runs
+      await new Promise((r) => setTimeout(r, 0))
     }
   } catch (err) {
     player?.stop()

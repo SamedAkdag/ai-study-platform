@@ -42,6 +42,49 @@ export function usesEmaVoice(lang?: string) {
   return langPrefix(lang || getStoredLang() || DEFAULT_TTS_LANG) === 'tr'
 }
 
+/** Turn a GFM table row into a short spoken clause. */
+function speakTableRow(line: string): string {
+  const cells = line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim())
+    .filter(Boolean)
+  if (cells.length < 2) return cells[0] || ''
+  // Skip markdown separator rows: |---|---|
+  if (cells.every((c) => /^:?-{3,}:?$/.test(c))) return ''
+  const [head, ...rest] = cells
+  const value = rest.join(', ')
+  return `${head}: ${value}`
+}
+
+/**
+ * Convert markdown (including GFM tables) into speakable lecture prose.
+ * Prefer this for "Hocaya sor" / Dinle TTS paths.
+ */
+export function toLectureSpeechText(md: string): string {
+  const lines = String(md || '').replace(/\r\n/g, '\n').split('\n')
+  const out: string[] = []
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) {
+      out.push('')
+      continue
+    }
+    if (/^\|/.test(line) || (line.includes('|') && /\|/.test(line.slice(1)))) {
+      const spoken = speakTableRow(line)
+      if (spoken) out.push(spoken + '.')
+      continue
+    }
+    out.push(line)
+  }
+  return markdownToSpeechText(out.join('\n'))
+    .replace(/\s*\.\s*\./g, '.')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 /** Strip markdown so TTS reads clean study text. */
 export function markdownToSpeechText(md: string): string {
   return md
@@ -54,6 +97,8 @@ export function markdownToSpeechText(md: string): string {
     .replace(/(\*\*|__)(.*?)\1/g, '$2')
     .replace(/(\*|_)(.*?)\1/g, '$2')
     .replace(/~~(.*?)~~/g, '$1')
+    // Pipe tables that slipped through as a single line
+    .replace(/\|/g, ' ')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/^\s*\d+\.\s+/gm, '')
     .replace(/\n{2,}/g, '. ')

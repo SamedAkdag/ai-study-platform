@@ -35,6 +35,7 @@ import {
   stopSpeech,
 } from '@/lib/tts'
 import StudyMarkdown from '@/components/StudyMarkdown'
+import LessonAskPanel from '@/components/LessonAskPanel'
 import LessonPlayer from '@/components/LessonPlayer'
 import LessonSpeechBubble from '@/components/LessonSpeechBubble'
 import {
@@ -45,6 +46,7 @@ import {
   lessonPathIds,
 } from '@/components/MindMapSync'
 import { useLessonSession } from '@/hooks/useLessonSession'
+import { buildLessonAskContext } from '@/lib/mindmapLesson/askContext'
 import type { LessonCamera } from '@/lib/mindmapLesson/types'
 import {
   downloadBlob,
@@ -54,6 +56,7 @@ import {
 type Props = {
   data: MindMapData
   title?: string
+  chapterId?: string
   markdown?: string | null
   defaultCollapsed?: boolean
   pageSources?: PageSource[] | null
@@ -63,6 +66,11 @@ type Props = {
   onOpenInPdf?: (page: number, label: string) => void
   onRefreshMap?: () => void
   refreshingMap?: boolean
+  /**
+   * studio = explore map with table-backed topic detail (Zihin haritası tab)
+   * lesson = cinematic DFS tour + EMA (Dinle tab)
+   */
+  variant?: 'studio' | 'lesson'
 }
 
 const BRANCH_COLORS_FALLBACK = [
@@ -386,6 +394,7 @@ function fitCalm(
 export default function MindMapPanel({
   data,
   title,
+  chapterId,
   markdown,
   defaultCollapsed = false,
   pageSources = null,
@@ -395,7 +404,9 @@ export default function MindMapPanel({
   onOpenInPdf,
   onRefreshMap,
   refreshingMap = false,
+  variant = 'studio',
 }: Props) {
+  const lessonMode = variant === 'lesson'
   const branches = useMemo(
     () => tidyBranches(data.branches ?? []),
     [data.branches],
@@ -420,14 +431,33 @@ export default function MindMapPanel({
     camera: LessonCamera
     completed: Set<string>
   } | null>(null)
+  const [exportCaption, setExportCaption] = useState<{
+    title: string
+    words: string[]
+    highlight: number
+  } | null>(null)
   const [viewportEpoch, setViewportEpoch] = useState(0)
   const [rfReady, setRfReady] = useState(0)
   const coarse = useCoarsePointer()
   const branchColors = useMemo(() => readBranchColors(), [data.central, data.branches])
 
   const lesson = useLessonSession({ data, markdown, title })
+  const lessonAsking = lessonMode && lesson.phase === 'asking'
   const lessonActive = Boolean(
-    lesson.phase !== 'idle' && lesson.phase !== 'error',
+    lessonMode &&
+      lesson.phase !== 'idle' &&
+      lesson.phase !== 'error',
+  )
+  /** Lesson map framing + bubble during live play or video export */
+  const lessonVisual = lessonActive || (lessonMode && exportBusy)
+  const askContext = useMemo(
+    () =>
+      buildLessonAskContext(
+        lesson.timeline,
+        lesson.playerState?.segmentIndex ?? 0,
+        markdown,
+      ),
+    [lesson.timeline, lesson.playerState?.segmentIndex, markdown],
   )
   const focusNodeId = exportFocus?.nodeId ?? lesson.activeNodeId
   const focusCamera = exportFocus?.camera ?? lesson.activeCamera
@@ -470,23 +500,25 @@ export default function MindMapPanel({
     lesson.activeWordIndex,
   ])
 
+  const displayCaption = exportCaption ?? lessonCaption
+
   const showSpeechBubble =
-    !exportBusy &&
+    lessonMode &&
     Boolean(focusNodeId) &&
-    Boolean(lessonCaption.words.length) &&
-    (lesson.phase === 'playing' ||
+    Boolean(displayCaption.words.length) &&
+    (exportBusy ||
+      lesson.phase === 'playing' ||
       lesson.phase === 'paused' ||
       lesson.phase === 'ready' ||
       lesson.phase === 'done' ||
-      // Partial timeline may already be audible while later segments synth
       (lesson.phase === 'synthesizing' &&
         Boolean(lesson.playerState?.playing || lesson.playerState?.currentTime)))
 
   // During lesson: keep FULL tree open so the map never disappears
   const effectiveOpenIds = useMemo(() => {
-    if (!lessonActive) return openIds
+    if (!lessonVisual) return openIds
     return lessonOpenAllBranches(branches.length)
-  }, [openIds, lessonActive, branches.length])
+  }, [openIds, lessonVisual, branches.length])
 
   const { nodes: rawNodes, edges: rawEdges, focusIds } = useMemo(
     () => layoutMindMap(data, effectiveOpenIds),
@@ -494,7 +526,7 @@ export default function MindMapPanel({
   )
 
   const nodes = useMemo(() => {
-    if (!lessonActive) return rawNodes
+    if (!lessonVisual) return rawNodes
     const hasFocus = Boolean(focusNodeId)
     const hubShot =
       !hasFocus || focusCamera === 'hub' || focusNodeId === 'central'
@@ -530,7 +562,7 @@ export default function MindMapPanel({
     })
   }, [
     rawNodes,
-    lessonActive,
+    lessonVisual,
     focusNodeId,
     focusCamera,
     focusCompleted,
@@ -538,7 +570,7 @@ export default function MindMapPanel({
   ])
 
   const edges = useMemo(() => {
-    if (!lessonActive) return rawEdges
+    if (!lessonVisual) return rawEdges
     return rawEdges.map((e) => {
       const hot = lessonEdgeHighlight(e.id, focusNodeId)
       return {
@@ -563,7 +595,7 @@ export default function MindMapPanel({
         },
       }
     })
-  }, [rawEdges, lessonActive, focusNodeId])
+  }, [rawEdges, lessonVisual, focusNodeId])
 
   const topicCount = useMemo(() => {
     let n = 1 + branches.length
@@ -664,7 +696,7 @@ export default function MindMapPanel({
 
   // Every new spoken node: force-fly the camera there (even if user panned away)
   useEffect(() => {
-    if (!lessonActive || !focusNodeId) return
+    if (!lessonActive || !focusNodeId || lessonAsking) return
 
     const id = focusNodeId
     const camera = focusCamera
@@ -720,7 +752,15 @@ export default function MindMapPanel({
     }
     // Node/camera change only — map layout length must not retrigger (flicker)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- followCamera reclaimed inside
-  }, [lessonActive, focusNodeId, focusCamera, exportFocus, branches, coarse])
+  }, [
+    lessonActive,
+    lessonAsking,
+    focusNodeId,
+    focusCamera,
+    exportFocus,
+    branches,
+    coarse,
+  ])
 
   const openDetail = useCallback(
     (d: NodeData) => {
@@ -769,13 +809,39 @@ export default function MindMapPanel({
   const exportVideo = useCallback(async () => {
     const tl = lesson.timeline
     const mapEl = canvasRef.current
-    if (!tl?.segments.length || !mapEl) return
-    if (lesson.phase === 'playing') void lesson.toggle()
+    if (!mapEl) {
+      setExportLabel('Harita alanı bulunamadı')
+      return
+    }
+    if (!tl?.segments.length) {
+      setExportLabel('Önce Dersi Başlat — ses hazır olunca indir')
+      return
+    }
+    // Pause lesson playback so it doesn't fight the export mix
+    if (lesson.phase === 'playing') {
+      await lesson.toggle()
+    }
+    // Warm AudioContext under this user gesture
+    try {
+      const warm = new AudioContext()
+      await warm.resume()
+      await warm.close()
+    } catch {
+      /* ignore */
+    }
+
     setExportBusy(true)
-    setExportLabel('Video kaydı hazırlanıyor…')
+    setExportLabel('Video kaydı başlıyor…')
     lessonManualPanRef.current = false
     lesson.setFollowCamera(true)
     const completed = new Set<string>()
+
+    const wordsForSeg = (segId: string, text: string) => {
+      const timed = (tl.words ?? []).filter((w) => w.segmentId === segId)
+      if (timed.length) return timed.map((w) => w.w)
+      return text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean)
+    }
+
     try {
       const blob = await exportLessonVideo({
         mapEl,
@@ -789,12 +855,49 @@ export default function MindMapPanel({
             const prev = tl.segments[j]!
             if (prev.nodeId !== nodeId) completed.add(prev.nodeId)
           }
+          const words = wordsForSeg(seg.id, seg.text)
+          setExportCaption({
+            title: seg.title || '',
+            words,
+            highlight: words.length ? 0 : -1,
+          })
           setExportFocus({
             nodeId,
             camera: seg.camera,
             completed: new Set(completed),
           })
-          await new Promise((r) => setTimeout(r, 50))
+          const frameIds = lessonFrameIds(nodeId, seg.camera, {
+            allBranchIds: branches.map((_, bi) => `b-${bi}`),
+            childIdsForBranch: (bid) => {
+              const bi = Number(bid.replace('b-', ''))
+              const kids = branches[bi]?.children ?? []
+              return kids.map((_, j) => `${bid}-l-${j}`)
+            },
+          })
+          fitLessonFrame(rfRef.current, {
+            camera: seg.camera,
+            nodeIds: frameIds,
+            focusId: nodeId,
+            coarse,
+          })
+          // Nudge bubble reposition after the fly starts
+          for (const ms of [200, 500, 900]) {
+            window.setTimeout(() => {
+              setViewportEpoch((n) => n + 1)
+            }, ms)
+          }
+          await new Promise((r) => setTimeout(r, 120))
+        },
+        onCaptionTick: async (i, wordIndex) => {
+          const seg = tl.segments[i]
+          if (!seg) return
+          const words = wordsForSeg(seg.id, seg.text)
+          setExportCaption({
+            title: seg.title || '',
+            words,
+            highlight: wordIndex,
+          })
+          setViewportEpoch((n) => n + 1)
         },
       })
       const name = `${(title || data.central || 'ders')
@@ -811,14 +914,16 @@ export default function MindMapPanel({
       )
     } finally {
       setExportFocus(null)
+      setExportCaption(null)
       setExportBusy(false)
     }
-  }, [lesson, title, data.central])
+  }, [lesson, title, data.central, branches, coarse])
 
   const onNodeClick = useCallback<NodeMouseHandler>(
     (_ev, node) => {
       const d = node.data as NodeData
       if (lessonActive && lessonHasAudio) {
+        if (lesson.phase === 'asking') return
         void seekLessonNode(node.id)
         openDetail(d)
         return
@@ -845,6 +950,7 @@ export default function MindMapPanel({
       lessonActive,
       lessonHasAudio,
       seekLessonNode,
+      lesson.phase,
     ],
   )
 
@@ -885,9 +991,9 @@ export default function MindMapPanel({
   const canvas = (
     <div
       ref={canvasRef}
-      className={`mind-map-canvas ${expanded ? 'mind-map-canvas--expanded' : ''}${
-        lessonActive ? ' mind-map-canvas--lesson' : ''
-      }`}
+      className={`mind-map-canvas${expanded ? ' mind-map-canvas--expanded' : ''}${
+        lessonVisual ? ' mind-map-canvas--lesson' : ''
+      }${exportBusy ? ' mind-map-canvas--exporting' : ''}`}
     >
       <div className="mind-map-canvas__aurora" aria-hidden />
       <div className="mind-map-canvas__grid" aria-hidden />
@@ -923,6 +1029,8 @@ export default function MindMapPanel({
         }}
         onMove={() => {
           if (!lessonActive) return
+          // Skip thrash during programmatic camera fly — timers sync the bubble
+          if (cameraFlyingRef.current) return
           if (viewportTickRef.current) return
           viewportTickRef.current = window.requestAnimationFrame(() => {
             viewportTickRef.current = 0
@@ -965,7 +1073,7 @@ export default function MindMapPanel({
           </>
         ) : null}
       </ReactFlow>
-      {lessonActive ? (
+      {lessonVisual ? (
         <div className="mind-map-canvas__vignette" aria-hidden />
       ) : null}
       <LessonSpeechBubble
@@ -973,9 +1081,9 @@ export default function MindMapPanel({
         rf={rfRef.current}
         canvasEl={canvasRef.current}
         nodeId={focusNodeId}
-        title={lessonCaption.title}
-        words={lessonCaption.words}
-        highlight={lessonCaption.highlight}
+        title={displayCaption.title}
+        words={displayCaption.words}
+        highlight={displayCaption.highlight}
         viewportEpoch={viewportEpoch}
         visible={showSpeechBubble}
       />
@@ -1082,69 +1190,74 @@ export default function MindMapPanel({
     <div
       className={`mind-map-panel mind-map-panel--spectacle ${
         expanded ? 'mind-map-panel--expanded' : ''
-      }${detail && !coarse ? ' mind-map-panel--with-detail' : ''}`}
+      }${detail && !coarse ? ' mind-map-panel--with-detail' : ''}${
+        lessonMode ? ' mind-map-panel--lesson-live mind-map-panel--lesson' : ''
+      }`}
     >
-      <div className="mind-map-panel__head">
-        <div>
-          <p className="mind-map-panel__kicker">Konu ağı</p>
-          <h2 className="mind-map-panel__title">
-            {title?.trim() || String(data.central || 'Zihin haritası')}
-          </h2>
-          {!collapsed && (
-            <p className="mind-map-panel__sub">
-              {coarse
-                ? 'Düğüme dokun — alt başlıklar açılır, PDF’ye sıçra'
-                : 'Dalı genişlet · scroll ile zoom · detay paneli sağda'}
-            </p>
-          )}
-        </div>
-        <div className="mind-map-panel__tools">
-          {onRefreshMap ? (
-            <button
-              type="button"
-              className="mind-map-tool"
-              disabled={refreshingMap}
-              onClick={() => onRefreshMap()}
-            >
-              {refreshingMap ? 'Yenileniyor…' : 'Yenile'}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="mind-map-tool"
-            onClick={() => {
-              const next = !collapsed
-              setCollapsed(next)
-              if (!next) scheduleFit(false)
-            }}
-          >
-            {collapsed ? 'Göster' : 'Gizle'}
-          </button>
-          {!collapsed && (
-            <>
+      {!lessonMode ? (
+        <div className="mind-map-panel__head">
+          <div>
+            <p className="mind-map-panel__kicker">Konu ağı</p>
+            <h2 className="mind-map-panel__title">
+              {title?.trim() || String(data.central || 'Zihin haritası')}
+            </h2>
+            {!collapsed ? (
+              <p className="mind-map-panel__sub">
+                {coarse
+                  ? 'Düğüme dokun — alt başlıklar açılır, PDF’ye sıçra'
+                  : 'Dalı genişlet · scroll ile zoom · detay paneli sağda'}
+              </p>
+            ) : null}
+          </div>
+          <div className="mind-map-panel__tools">
+            {onRefreshMap ? (
               <button
                 type="button"
                 className="mind-map-tool"
-                onClick={resetOverview}
+                disabled={refreshingMap}
+                onClick={() => onRefreshMap()}
               >
-                Genel bakış
+                {refreshingMap ? 'Yenileniyor…' : 'Yenile'}
               </button>
-              <button
-                type="button"
-                className="mind-map-tool mind-map-tool--accent"
-                onClick={() => {
-                  setExpanded((v) => !v)
-                }}
-              >
-                {expanded ? 'Küçült' : 'Tam sahne'}
-              </button>
-            </>
-          )}
+            ) : null}
+            <button
+              type="button"
+              className="mind-map-tool"
+              onClick={() => {
+                const next = !collapsed
+                setCollapsed(next)
+                if (!next) scheduleFit(false)
+              }}
+            >
+              {collapsed ? 'Göster' : 'Gizle'}
+            </button>
+            {!collapsed ? (
+              <>
+                <button
+                  type="button"
+                  className="mind-map-tool"
+                  onClick={resetOverview}
+                >
+                  Genel bakış
+                </button>
+                <button
+                  type="button"
+                  className="mind-map-tool mind-map-tool--accent"
+                  onClick={() => {
+                    setExpanded((v) => !v)
+                  }}
+                >
+                  {expanded ? 'Küçült' : 'Tam sahne'}
+                </button>
+              </>
+            ) : null}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {collapsed ? null : (
         <>
+          {!lessonMode ? (
           <div className="mind-map-jumps" role="list">
             <button
               type="button"
@@ -1200,67 +1313,98 @@ export default function MindMapPanel({
               )
             })}
           </div>
+          ) : null}
 
           <div
-            className={`mind-map-stage${lessonActive ? ' mind-map-stage--lesson' : ''}`}
+            className={`mind-map-stage${lessonMode ? ' mind-map-stage--lesson' : ''}${
+              lessonAsking ? ' mind-map-stage--asking' : ''
+            }`}
           >
             {canvas}
             {detail && !coarse && !lessonActive ? (
               <div className="mind-map-stage__detail">{detailCard}</div>
             ) : null}
+            {lessonMode && chapterId ? (
+              <LessonAskPanel
+                open={lessonAsking}
+                chapterId={chapterId}
+                chapterTitle={title || data.central || 'Ünite'}
+                context={askContext}
+                onResume={() => {
+                  stopSpeech()
+                  setSpeaking(false)
+                  lessonManualPanRef.current = false
+                  void lesson.resumeFromAsk()
+                }}
+              />
+            ) : null}
           </div>
 
-          <LessonPlayer
-            phase={lesson.phase}
-            error={lesson.error}
-            progressLabel={lesson.progressLabel}
-            progressPct={lesson.progressPct}
-            timeline={lesson.timeline}
-            currentTime={lesson.playerState?.currentTime ?? 0}
-            segmentIndex={lesson.playerState?.segmentIndex ?? 0}
-            wordIndex={lesson.activeWordIndex}
-            rate={lesson.playerState?.rate ?? 1}
-            followCamera={lesson.followCamera}
-            captionOnMap={showSpeechBubble}
-            onStart={() => {
-              stopSpeech()
-              setSpeaking(false)
-              lessonManualPanRef.current = false
-              void lesson.start()
-            }}
-            onToggle={() => void lesson.toggle()}
-            onPrev={lesson.prev}
-            onNext={lesson.next}
-            onSeekSegment={lesson.seekSegment}
-            onSetRate={lesson.setRate}
-            onRestart={() => {
-              lessonManualPanRef.current = false
-              void lesson.restart()
-            }}
-            onFollowCamera={() => {
-              lessonManualPanRef.current = false
-              lesson.setFollowCamera(true)
-              if (focusNodeId) {
-                const frameIds = lessonFrameIds(focusNodeId, focusCamera, {
-                  allBranchIds: branches.map((_, i) => `b-${i}`),
-                  childIdsForBranch: (bid) => {
-                    const i = Number(bid.replace('b-', ''))
-                    const kids = branches[i]?.children ?? []
-                    return kids.map((_, j) => `${bid}-l-${j}`)
-                  },
-                })
-                fitLessonFrame(rfRef.current, {
-                  camera: focusCamera,
-                  nodeIds: frameIds,
-                  focusId: focusNodeId,
-                  coarse,
-                })
-              }
-            }}
-            onExportVideo={() => void exportVideo()}
-            exportBusy={exportBusy}
-            exportLabel={exportLabel}
-          />
+          {lessonMode ? (
+            <LessonPlayer
+              phase={lesson.phase}
+              error={lesson.error}
+              progressLabel={lesson.progressLabel}
+              progressPct={lesson.progressPct}
+              timeline={lesson.timeline}
+              currentTime={lesson.playerState?.currentTime ?? 0}
+              segmentIndex={lesson.playerState?.segmentIndex ?? 0}
+              wordIndex={lesson.activeWordIndex}
+              rate={lesson.playerState?.rate ?? 1}
+              followCamera={lesson.followCamera}
+              captionOnMap={showSpeechBubble && !lessonAsking}
+              canAsk={Boolean(chapterId) && Boolean(askContext)}
+              onAsk={() => {
+                stopSpeech()
+                setSpeaking(false)
+                lesson.pauseForAsk()
+              }}
+              onResumeAsk={() => {
+                stopSpeech()
+                setSpeaking(false)
+                lessonManualPanRef.current = false
+                void lesson.resumeFromAsk()
+              }}
+              onStart={() => {
+                stopSpeech()
+                setSpeaking(false)
+                lessonManualPanRef.current = false
+                void lesson.start()
+              }}
+              onToggle={() => void lesson.toggle()}
+              onPrev={lesson.prev}
+              onNext={lesson.next}
+              onSeekSegment={lesson.seekSegment}
+              onSetRate={lesson.setRate}
+              onRestart={() => {
+                lessonManualPanRef.current = false
+                void lesson.restart()
+              }}
+              onFollowCamera={() => {
+                lessonManualPanRef.current = false
+                lesson.setFollowCamera(true)
+                if (focusNodeId) {
+                  const frameIds = lessonFrameIds(focusNodeId, focusCamera, {
+                    allBranchIds: branches.map((_, i) => `b-${i}`),
+                    childIdsForBranch: (bid) => {
+                      const i = Number(bid.replace('b-', ''))
+                      const kids = branches[i]?.children ?? []
+                      return kids.map((_, j) => `${bid}-l-${j}`)
+                    },
+                  })
+                  fitLessonFrame(rfRef.current, {
+                    camera: focusCamera,
+                    nodeIds: frameIds,
+                    focusId: focusNodeId,
+                    coarse,
+                  })
+                }
+              }}
+              onExportVideo={() => void exportVideo()}
+              exportBusy={exportBusy}
+              exportLabel={exportLabel}
+            />
+          ) : null}
 
           {detail && coarse
             ? createPortal(

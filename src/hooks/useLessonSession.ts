@@ -16,6 +16,7 @@ export type LessonPhase =
   | 'ready'
   | 'playing'
   | 'paused'
+  | 'asking'
   | 'done'
   | 'error'
 
@@ -46,6 +47,7 @@ export function useLessonSession(input: {
   const abortRef = useRef<AbortController | null>(null)
   const startedPlayRef = useRef(false)
   const runIdRef = useRef(0)
+  const askingRef = useRef(false)
   const mapKey = `${input.data.central}::${input.data.branches.map((b) => b.label).join('|')}`
   const mapKeyRef = useRef(mapKey)
 
@@ -72,6 +74,7 @@ export function useLessonSession(input: {
     setCompletedIds(new Set())
     setFollowCamera(true)
     startedPlayRef.current = false
+    askingRef.current = false
     setProgressPct(0)
     setProgressLabel('')
   }, [mapKey])
@@ -82,41 +85,60 @@ export function useLessonSession(input: {
     playerRef.current = api
     let lastNode: string | null = null
     let lastSeg = -1
+    let lastWord = -2
     let lastPlaying: boolean | null = null
+    let lastBuffering: boolean | null = null
+    let lastDone = false
+    let lastClockMs = 0
     api.subscribe((s) => {
       const focusChanged =
         s.nodeId !== lastNode || s.segmentIndex !== lastSeg
-      const playChanged = s.playing !== lastPlaying || s.done
-      // Always refresh clock lightly; force React update on focus/play changes
-      if (focusChanged || playChanged || s.done) {
-        lastNode = s.nodeId
-        lastSeg = s.segmentIndex
-        lastPlaying = s.playing
-        setPlayerState(s)
-        if (s.done) setPhase('done')
-        else if (s.playing) setPhase('playing')
-        else if (s.currentTime > 0.05) setPhase('paused')
+      const wordChanged = s.wordIndex !== lastWord
+      const playChanged =
+        s.playing !== lastPlaying ||
+        s.buffering !== lastBuffering ||
+        s.done !== lastDone
+      // Avoid re-rendering MindMapPanel on every clock tick — only on
+      // meaningful karaoke/focus changes, plus a slow clock for the strip.
+      const now = performance.now()
+      const clockDue = now - lastClockMs >= 500
+      if (!focusChanged && !wordChanged && !playChanged && !clockDue) return
 
-        if (focusChanged && s.nodeId) {
-          setCompletedIds((prev) => {
-            const tl = api.getTimelineSnapshot()
-            const next = new Set<string>()
-            for (const seg of tl.segments) {
-              if (seg.nodeId === s.nodeId) continue
-              if (seg.end <= s.currentTime + 0.05) next.add(seg.nodeId)
-            }
-            if (
-              prev.size === next.size &&
-              [...next].every((id) => prev.has(id))
-            ) {
-              return prev
-            }
-            return next
-          })
-        }
-      } else {
-        // Throttled clock for karaoke without rebuilding the map
-        setPlayerState(s)
+      lastNode = s.nodeId
+      lastSeg = s.segmentIndex
+      lastWord = s.wordIndex
+      lastPlaying = s.playing
+      lastBuffering = s.buffering
+      lastDone = s.done
+      if (clockDue) lastClockMs = now
+      setPlayerState(s)
+
+      if (!askingRef.current) {
+        if (s.done) setPhase('done')
+        else if (s.buffering) {
+          // Stay in lesson flow — EMA is catching up on the next node
+          setPhase('playing')
+          setProgressLabel('Sonraki düğümün sesi hazırlanıyor…')
+        } else if (s.playing) setPhase('playing')
+        else if (s.currentTime > 0.05) setPhase('paused')
+      }
+
+      if (focusChanged && s.nodeId) {
+        setCompletedIds((prev) => {
+          const tl = api.getTimelineSnapshot()
+          const next = new Set<string>()
+          for (const seg of tl.segments) {
+            if (seg.nodeId === s.nodeId) continue
+            if (seg.end <= s.currentTime + 0.05) next.add(seg.nodeId)
+          }
+          if (
+            prev.size === next.size &&
+            [...next].every((id) => prev.has(id))
+          ) {
+            return prev
+          }
+          return next
+        })
       }
     })
     return api
@@ -136,9 +158,9 @@ export function useLessonSession(input: {
 
     setError(null)
     startedPlayRef.current = false
+    askingRef.current = false
     setFollowCamera(true)
     setCompletedIds(new Set())
-    // Show UI immediately — before any await
     setPhase('loading_model')
     setProgressLabel('Ses modeli hazırlanıyor…')
     setProgressPct(3)
@@ -148,8 +170,16 @@ export function useLessonSession(input: {
       await api.unlock()
       if (runId !== runIdRef.current || ac.signal.aborted) return
 
+      // EMA runs locally one segment at a time (not an AI call per node).
+      // Buffer a few nodes before starting so playback doesn't stall ~10s
+      // between the first and second node while the next WAV is baking.
+      const startWhenReady = Math.min(3, steps.length)
       const tl = await synthesizeLessonTimeline(steps, {
         signal: ac.signal,
+        lookahead: 4,
+        getPlayheadIndex: () =>
+          playerRef.current?.getPlayheadIndex() ?? 0,
+        shouldPause: () => askingRef.current,
         onModelProgress: (p) => {
           if (runId !== runIdRef.current) return
           setPhase('loading_model')
@@ -158,14 +188,19 @@ export function useLessonSession(input: {
         },
         onProgress: (p) => {
           if (runId !== runIdRef.current) return
-          // Don't yank UI out of "playing" once audio has started —
-          // later segments keep synthesizing in the background.
           setPhase((prev) =>
-            prev === 'playing' || prev === 'paused' || prev === 'done'
+            prev === 'playing' ||
+            prev === 'paused' ||
+            prev === 'asking' ||
+            prev === 'done'
               ? prev
               : 'synthesizing',
           )
-          setProgressLabel(p.label)
+          setProgressLabel(
+            startedPlayRef.current
+              ? `Önden hazırlanıyor: ${p.label}`
+              : `Tampon: ${p.label} (${p.readyCount}/${startWhenReady})`,
+          )
           setProgressPct(
             Math.round(32 + (p.index / Math.max(1, p.total)) * 68),
           )
@@ -175,11 +210,17 @@ export function useLessonSession(input: {
           setTimeline(partial)
           const player = ensurePlayer()
           player.setTimeline(partial)
-          if (!startedPlayRef.current && partial.segments.length >= 1) {
+          if (
+            !startedPlayRef.current &&
+            partial.segments.length >= startWhenReady
+          ) {
             startedPlayRef.current = true
             await player.seekSegment(0)
             await player.play()
-            if (runId === runIdRef.current) setPhase('playing')
+            if (runId === runIdRef.current && !askingRef.current) {
+              setPhase('playing')
+              setProgressLabel('Ders oynuyor')
+            }
           }
         },
       })
@@ -204,14 +245,13 @@ export function useLessonSession(input: {
         startedPlayRef.current = true
         await player.seekSegment(0)
         await player.play()
-        setPhase('playing')
-      } else if (!player.getState().playing) {
+        if (!askingRef.current) setPhase('playing')
+      } else if (!player.getState().playing && !askingRef.current) {
         setPhase('ready')
       }
     } catch (err) {
       if (runId !== runIdRef.current) return
       if ((err as DOMException)?.name === 'AbortError') {
-        // Only hide UI if a newer run replaced this one
         return
       }
       console.error('[lesson]', err)
@@ -224,12 +264,40 @@ export function useLessonSession(input: {
     }
   }, [ensurePlayer, steps])
 
+  const pauseForAsk = useCallback(() => {
+    const api = playerRef.current
+    if (!api) return false
+    if (
+      phase !== 'playing' &&
+      phase !== 'paused' &&
+      phase !== 'ready' &&
+      phase !== 'asking'
+    ) {
+      return false
+    }
+    askingRef.current = true
+    api.pause()
+    setPhase('asking')
+    setFollowCamera(false)
+    return true
+  }, [phase])
+
+  const resumeFromAsk = useCallback(async () => {
+    const api = playerRef.current
+    if (!api) return
+    askingRef.current = false
+    setFollowCamera(true)
+    await api.play()
+    setPhase('playing')
+  }, [])
+
   const toggle = useCallback(async () => {
     const api = playerRef.current
     if (!api || phase === 'idle' || phase === 'error') {
       await start()
       return
     }
+    if (phase === 'asking') return
     if (phase === 'done') {
       await api.seekSegment(0)
       await api.play()
@@ -246,13 +314,25 @@ export function useLessonSession(input: {
     }
   }, [phase, start])
 
-  const seekNode = useCallback(async (nodeId: string) => {
-    const api = playerRef.current
-    if (!api) return
-    await api.seekNode(nodeId)
-    setFollowCamera(true)
-    if (!api.getState().playing) await api.play()
-  }, [])
+  const seekNode = useCallback(
+    async (nodeId: string) => {
+      if (askingRef.current || phase === 'asking') return
+      const api = playerRef.current
+      if (!api) return
+      await api.seekNode(nodeId)
+      setFollowCamera(true)
+      if (!api.getState().playing) await api.play()
+    },
+    [phase],
+  )
+
+  const seekSegment = useCallback(
+    (i: number) => {
+      if (askingRef.current || phase === 'asking') return
+      void playerRef.current?.seekSegment(i)
+    },
+    [phase],
+  )
 
   return {
     steps,
@@ -270,12 +350,21 @@ export function useLessonSession(input: {
     setFollowCamera,
     start,
     toggle,
-    next: () => void playerRef.current?.next(),
-    prev: () => void playerRef.current?.prev(),
+    pauseForAsk,
+    resumeFromAsk,
+    next: () => {
+      if (askingRef.current || phase === 'asking') return
+      void playerRef.current?.next()
+    },
+    prev: () => {
+      if (askingRef.current || phase === 'asking') return
+      void playerRef.current?.prev()
+    },
     setRate: (r: number) => playerRef.current?.setRate(r),
     seekNode,
-    seekSegment: (i: number) => void playerRef.current?.seekSegment(i),
+    seekSegment,
     restart: async () => {
+      askingRef.current = false
       setCompletedIds(new Set())
       setFollowCamera(true)
       await playerRef.current?.seekSegment(0)
@@ -285,6 +374,7 @@ export function useLessonSession(input: {
     cancel: () => {
       runIdRef.current += 1
       abortRef.current?.abort()
+      askingRef.current = false
       playerRef.current?.pause()
       setPhase('idle')
       setError(null)

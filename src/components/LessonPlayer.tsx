@@ -26,6 +26,9 @@ type Props = {
   exportLabel?: string
   /** Karaoke lives on the map bubble — strip stays controls-only */
   captionOnMap?: boolean
+  canAsk?: boolean
+  onAsk?: () => void
+  onResumeAsk?: () => void
 }
 
 const RATES = [0.75, 1, 1.25, 1.5] as const
@@ -60,17 +63,23 @@ export default function LessonPlayer({
   exportBusy = false,
   exportLabel = '',
   captionOnMap = false,
+  canAsk = false,
+  onAsk,
+  onResumeAsk,
 }: Props) {
   const touchRef = useRef<{ x: number; y: number } | null>(null)
   const busy = phase === 'loading_model' || phase === 'synthesizing'
+  const asking = phase === 'asking'
   const active =
     phase === 'playing' ||
     phase === 'paused' ||
     phase === 'ready' ||
     phase === 'done' ||
     phase === 'error' ||
+    phase === 'asking' ||
     busy
 
+  const controlsLocked = asking
   const seg = timeline?.segments[segmentIndex]
   const segWords = (timeline?.words ?? []).filter((w) => w.segmentId === seg?.id)
   let localWord = -1
@@ -88,7 +97,7 @@ export default function LessonPlayer({
     <div
       className={`lesson-strip${active ? ' lesson-strip--active' : ''}${
         captionOnMap ? ' lesson-strip--cinema' : ''
-      }`}
+      }${asking ? ' lesson-strip--asking' : ''}`}
       onTouchStart={(e) => {
         const t = e.changedTouches[0]
         if (t) touchRef.current = { x: t.clientX, y: t.clientY }
@@ -97,7 +106,7 @@ export default function LessonPlayer({
         const start = touchRef.current
         touchRef.current = null
         const t = e.changedTouches[0]
-        if (!start || !t || !active) return
+        if (!start || !t || !active || controlsLocked) return
         const dx = t.clientX - start.x
         const dy = t.clientY - start.y
         if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.4) {
@@ -141,14 +150,33 @@ export default function LessonPlayer({
             </p>
           ) : null}
 
-          {!busy && nowTitle && !captionOnMap ? (
+          {asking ? (
+            <p className="lesson-strip__ask-banner">
+              Anlatım duraklatıldı · hocaya soru soruyorsun
+              {onResumeAsk ? (
+                <button
+                  type="button"
+                  className="lesson-strip__ask-resume"
+                  onClick={onResumeAsk}
+                >
+                  Derse devam
+                </button>
+              ) : null}
+            </p>
+          ) : null}
+
+          {!busy && nowTitle && !captionOnMap && !asking ? (
             <p className="lesson-strip__now">
               <span className="lesson-strip__now-kicker">Şimdi</span>
               {nowTitle}
             </p>
           ) : null}
 
-          {words.length > 0 && !busy && phase !== 'error' && !captionOnMap ? (
+          {words.length > 0 &&
+          !busy &&
+          phase !== 'error' &&
+          !captionOnMap &&
+          !asking ? (
             <p className="lesson-strip__caption" aria-live="off">
               {words.map((w, i) => (
                 <span
@@ -169,14 +197,27 @@ export default function LessonPlayer({
 
           <div className="lesson-strip__row">
             <div className="lesson-strip__controls">
-              <button type="button" className="lesson-strip__btn" onClick={onPrev} aria-label="Önceki">
+              <button
+                type="button"
+                className="lesson-strip__btn"
+                onClick={onPrev}
+                disabled={controlsLocked}
+                aria-label="Önceki"
+              >
                 ◀
               </button>
               <button
                 type="button"
                 className="lesson-strip__btn lesson-strip__btn--main"
-                onClick={phase === 'error' ? onStart : onToggle}
-                disabled={busy && !timeline?.segments.length}
+                onClick={
+                  phase === 'error'
+                    ? onStart
+                    : asking && onResumeAsk
+                      ? onResumeAsk
+                      : onToggle
+                }
+                disabled={busy && !timeline?.segments.length && !asking}
+                aria-label={asking ? 'Derse devam' : undefined}
               >
                 {phase === 'error'
                   ? 'Tekrar'
@@ -184,11 +225,19 @@ export default function LessonPlayer({
                     ? '❚❚'
                     : phase === 'done'
                       ? '↻'
-                      : busy
-                        ? '…'
-                        : '▶'}
+                      : asking
+                        ? '▶'
+                        : busy
+                          ? '…'
+                          : '▶'}
               </button>
-              <button type="button" className="lesson-strip__btn" onClick={onNext} aria-label="Sonraki">
+              <button
+                type="button"
+                className="lesson-strip__btn"
+                onClick={onNext}
+                disabled={controlsLocked}
+                aria-label="Sonraki"
+              >
                 ▶
               </button>
             </div>
@@ -204,6 +253,7 @@ export default function LessonPlayer({
                   Math.max(0, (timeline?.segments.length ?? 1) - 1),
                 )}
                 aria-label="Ders ilerlemesi"
+                disabled={controlsLocked}
                 onChange={(e) => onSeekSegment(Number(e.target.value))}
               />
               <span className="lesson-strip__time">
@@ -227,7 +277,17 @@ export default function LessonPlayer({
             </div>
           </div>
 
-          {!followCamera ? (
+          {canAsk && onAsk && !asking && !busy && phase !== 'error' ? (
+            <button
+              type="button"
+              className="lesson-strip__ask"
+              onClick={onAsk}
+            >
+              Soru sor
+            </button>
+          ) : null}
+
+          {!followCamera && !asking ? (
             <button
               type="button"
               className="lesson-strip__follow"
@@ -242,11 +302,24 @@ export default function LessonPlayer({
               <button
                 type="button"
                 className="lesson-strip__export-btn"
-                disabled={exportBusy || busy}
+                disabled={
+                  exportBusy ||
+                  asking ||
+                  (busy && !timeline.segments.length)
+                }
                 onClick={onExportVideo}
               >
-                {exportBusy ? exportLabel || 'Video hazırlanıyor…' : 'Videoyu indir'}
+                {exportBusy
+                  ? exportLabel || '1080p video hazırlanıyor…'
+                  : exportLabel &&
+                      exportLabel !== 'Video indirildi' &&
+                      exportLabel !== '1080p video hazır'
+                    ? exportLabel
+                    : 'Videoyu indir (1080p)'}
               </button>
+              {exportLabel && !exportBusy ? (
+                <span className="lesson-strip__export-note">{exportLabel}</span>
+              ) : null}
             </div>
           ) : null}
 
