@@ -34,3 +34,11 @@ ocr-service/__pycache__/
 
 # Supabase
 supabase/.temp
+
+# EMA Lightning weights (~36 MB) — fetch with: npm run ema:models
+public/models/ema/*.onnx
+public/models/ema/*.wasm
+public/models/ema/meta.json
+public/models/ema/LICENSE
+public/models/ema/NOTICE
+!public/models/ema/README.md

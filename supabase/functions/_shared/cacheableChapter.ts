@@ -28,7 +28,7 @@ import {
  * Bump when system/FIXED layout changes — notes + artifacts must be
  * redeployed together (Supabase bundles _shared per function).
  */
-export const CACHE_LAYOUT_VERSION = 'v4-unified-max-tokens'
+export const CACHE_LAYOUT_VERSION = 'v5-mindmap-narration'
 
 /**
  * Stable system head including ALL output schemas.
@@ -45,8 +45,8 @@ BRIEF → {"markdown":"K1 markdown max~700"}
 DETAILED → {"markdown":"K3 markdown max~3200; 5–12 ##; tablo+Dikkat; atlas kapsamı"}
 PRACTICE → {"examples":[{"problem":"…","solution_steps":["1","2","3"]}],"quiz":[{"question":"…","options":["A","B","C","D"],"correct_index":0,"explanation":"…"}],"flashcards":[{"role":"hook|teach|concept|check|trap|summary","front":"…","back":"…"}]}
   (2 örnek, 4 quiz, 8–10 flash; zihin haritası YOK)
-MINDMAP → {"mind_map":{"central":"omurga","branches":[{"label":"Ana","page":12,"children":["Alt1","Alt2"]}]}}
-  (6–14 ana; her birinde 2–6 kısa alt; cümle yasak)`
+MINDMAP → {"mind_map":{"central":"omurga","narration":"opsiyonel 40–90 kelime konuşma (yalnız bu düğüm; altlara atıf/şekil yok)","branches":[{"label":"Ana","page":12,"narration":"opsiyonel","children":["Alt1","Alt2"],"child_narrations":["opsiyonel"]}]}}
+  (6–14 ana; 2–6 kısa alt; başlıkta cümle yasak; narration opsiyonel—önce yapı; istemci boşları doldurur)`
 
 const SOURCE_PACK_CHARS = 8000
 

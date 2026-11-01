@@ -4,7 +4,15 @@ export type PageSource = { page: number; topics: string[]; excerpt: string }
 export type Page = { page: number; text: string }
 export type MindMap = {
   central: string
-  branches: Array<{ label: string; children?: string[]; page?: number }>
+  /** Optional guided-lesson speech (same call; client fills gaps) */
+  narration?: string
+  branches: Array<{
+    label: string
+    children?: string[]
+    page?: number
+    narration?: string
+    child_narrations?: string[]
+  }>
 }
 
 /** Compress a sentence/dump into a short topic heading. */
@@ -90,13 +98,25 @@ export function parseMindMap(
       5,
       36,
     ) || fallbackCentral.slice(0, 36)
+  const hubNarration =
+    typeof (mm as { narration?: unknown }).narration === 'string'
+      ? String((mm as { narration: string }).narration)
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 900)
+      : undefined
   const seen = new Set<string>()
-  const branches: Array<{ label: string; children?: string[]; page?: number }> =
-    []
+  const branches: MindMap['branches'] = []
   if (Array.isArray(mm.branches)) {
     for (const b of mm.branches) {
       if (!b || typeof b !== 'object') continue
-      const row = b as { label?: unknown; children?: unknown; page?: unknown }
+      const row = b as {
+        label?: unknown
+        children?: unknown
+        page?: unknown
+        narration?: unknown
+        child_narrations?: unknown
+      }
       const label = toTopicLabel(String(row.label || ''), 6, 40)
       if (!label) continue
       const key = label.toLowerCase()
@@ -130,11 +150,34 @@ export function parseMindMap(
         Number.isFinite(pageNum) && pageNum >= 1
           ? Math.round(pageNum)
           : undefined
-      branches.push({ label, children, ...(page ? { page } : {}) })
+      const narration =
+        typeof row.narration === 'string'
+          ? row.narration.replace(/\s+/g, ' ').trim().slice(0, 900)
+          : undefined
+      const child_narrations = Array.isArray(row.child_narrations)
+        ? row.child_narrations
+            .map((x) => String(x || '').replace(/\s+/g, ' ').trim().slice(0, 900))
+            .slice(0, children.length)
+        : undefined
+      branches.push({
+        label,
+        children,
+        ...(page ? { page } : {}),
+        ...(narration && narration.length >= 20 ? { narration } : {}),
+        ...(child_narrations?.length ? { child_narrations } : {}),
+      })
       if (branches.length >= 16) break
     }
   }
-  return branches.length >= 1 ? { central, branches } : null
+  return branches.length >= 1
+    ? {
+        central,
+        ...(hubNarration && hubNarration.length >= 20
+          ? { narration: hubNarration }
+          : {}),
+        branches,
+      }
+    : null
 }
 
 export function mindMapFallback(

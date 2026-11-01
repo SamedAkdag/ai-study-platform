@@ -220,10 +220,15 @@ export function scrubMindMapLabels(map: MindMap): MindMap {
       label,
       children,
       ...(b.page ? { page: b.page } : {}),
+      ...(b.narration ? { narration: b.narration } : {}),
+      ...(b.child_narrations?.length
+        ? { child_narrations: b.child_narrations.slice(0, children.length) }
+        : {}),
     }
   })
   return {
     central: toTopicLabel(map.central, 6, 40) || map.central,
+    ...(map.narration ? { narration: map.narration } : {}),
     branches,
   }
 }

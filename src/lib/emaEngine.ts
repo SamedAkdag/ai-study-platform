@@ -17,8 +17,47 @@ import {
 export type { EmaTimingTrack, EmaWordTiming } from '@/lib/emaTimings'
 export { timingsToJson, wordIndexAtTime } from '@/lib/emaTimings'
 
-export const EMA_MODEL_BASE =
+/** Prefer self-hosted files under /models/ema/; fall back to Hugging Face. */
+export const EMA_MODEL_BASE_LOCAL = '/models/ema/'
+export const EMA_MODEL_BASE_HF =
   'https://huggingface.co/ozcancelik/ema-lightning-onnx/resolve/main/'
+export const EMA_MODEL_BASE = EMA_MODEL_BASE_LOCAL
+
+let resolvedModelBase: string | null = null
+
+/** SPA hosts often 200-ok HTML for missing /models/* — require a real wasm body. */
+async function localEmaAssetsPresent(): Promise<boolean> {
+  try {
+    const res = await fetch(`${EMA_MODEL_BASE_LOCAL}normalizer.wasm`, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { Range: 'bytes=0-3' },
+    })
+    if (!res.ok) return false
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (ct.includes('text/html') || ct.includes('application/json')) return false
+    const buf = await res.arrayBuffer()
+    if (buf.byteLength < 4) return false
+    const u = new Uint8Array(buf)
+    // WASM magic: \0asm
+    if (u[0] === 0x00 && u[1] === 0x61 && u[2] === 0x73 && u[3] === 0x6d) {
+      return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
+async function resolveEmaModelBase(): Promise<string> {
+  if (resolvedModelBase) return resolvedModelBase
+  if (await localEmaAssetsPresent()) {
+    resolvedModelBase = EMA_MODEL_BASE_LOCAL
+    return resolvedModelBase
+  }
+  resolvedModelBase = EMA_MODEL_BASE_HF
+  return resolvedModelBase
+}
 
 export { RATE, wavBlob }
 
@@ -80,18 +119,40 @@ async function loadBackend(
   backend: 'webgpu' | 'wasm',
   opts: EnsureOpts,
 ): Promise<InstanceType<typeof EMA>> {
-  return EMA.load(
-    backend,
-    EMA_MODEL_BASE,
-    (stage, fraction) => {
-      opts.onProgress?.({
-        stage,
-        fraction,
-        label: stageLabel(stage),
-      })
-    },
-    'fp32',
-  )
+  let base = await resolveEmaModelBase()
+  try {
+    return await EMA.load(
+      backend,
+      base,
+      (stage, fraction) => {
+        opts.onProgress?.({
+          stage,
+          fraction,
+          label: stageLabel(stage),
+        })
+      },
+      'fp32',
+    )
+  } catch (err) {
+    // Local /models/ema looked present but failed → fall back to Hugging Face once
+    if (base === EMA_MODEL_BASE_LOCAL) {
+      resolvedModelBase = EMA_MODEL_BASE_HF
+      base = EMA_MODEL_BASE_HF
+      return EMA.load(
+        backend,
+        base,
+        (stage, fraction) => {
+          opts.onProgress?.({
+            stage,
+            fraction,
+            label: stageLabel(stage),
+          })
+        },
+        'fp32',
+      )
+    }
+    throw err
+  }
 }
 
 export async function resetEma() {

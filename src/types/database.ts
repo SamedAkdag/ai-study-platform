@@ -52,10 +52,16 @@ export type MindMapBranch = {
   children?: string[]
   /** Best PDF page for this branch when known */
   page?: number | null
+  /** Optional guided-lesson speech for this branch (same AI call / client fill) */
+  narration?: string
+  /** Optional leaf narrations aligned with children[] */
+  child_narrations?: string[]
 }
 
 export type MindMapData = {
   central: string
+  /** Optional guided-lesson speech for the hub */
+  narration?: string
   branches: MindMapBranch[]
 }
 
