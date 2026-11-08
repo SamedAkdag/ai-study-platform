@@ -617,6 +617,83 @@ export async function runNotesRewrite(opts: {
   }
 }
 
+/** Per-section gate for rewrite passes (0 LLM). */
+export function scoreSectionMarkdown(
+  markdown: string,
+  section: NotesSectionPlan,
+  wordsPerMin: { min: number; max: number },
+): { score: number; issues: string[]; requiresReplan: boolean } {
+  const issues: string[] = []
+  let score = 72
+  const md = String(markdown || '').trim()
+  const targetWords = Math.max(
+    80,
+    Math.round(section.minutes * Math.max(60, wordsPerMin.min)),
+  )
+  const minChars = Math.max(220, Math.round(targetWords * 4.2))
+
+  if (md.length < 80) {
+    issues.push('empty_or_tiny')
+    score -= 45
+  } else if (md.length < minChars * 0.5) {
+    issues.push('too_short')
+    score -= 28
+  } else if (md.length < minChars * 0.72) {
+    issues.push('thin')
+    score -= 14
+  } else {
+    score += 8
+  }
+
+  if (!/^##\s+/m.test(md)) {
+    issues.push('no_heading')
+    score -= 10
+  }
+
+  if (section.tasks.includes('table') && !/\|.+\|/.test(md)) {
+    issues.push('missing_table')
+    score -= 12
+  }
+  if (
+    section.tasks.includes('example') &&
+    !/(örnek|örn\.|örneğin|\börn\b|örnek:)/i.test(md)
+  ) {
+    issues.push('missing_example')
+    score -= 10
+  }
+  if (
+    section.tasks.includes('visual') &&
+    !/(diyagram|şekil|görsel|şema|ascii|```)/i.test(md)
+  ) {
+    issues.push('missing_visual')
+    score -= 6
+  }
+
+  for (const goal of section.goals.slice(0, 2)) {
+    const token = String(goal || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 5)[0]
+    if (token && !md.toLowerCase().includes(token.slice(0, 12))) {
+      issues.push('goal_gap')
+      score -= 4
+      break
+    }
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)))
+  return {
+    score,
+    issues,
+    requiresReplan:
+      score < 70 ||
+      issues.includes('empty_or_tiny') ||
+      issues.includes('too_short'),
+  }
+}
+
 /** Score all sections; return those below 70 for client rewrite passes. */
 export function listWeakSections(
   plan: NotesPlan,
