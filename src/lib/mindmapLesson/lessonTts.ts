@@ -1,8 +1,13 @@
 /**
  * Build a unified lesson timeline with EMA (client-only, no new server calls).
  * Synthesizes only a small lookahead ahead of the playhead so the UI stays responsive.
+ * Optional IndexedDB cache skips re-synth for the same chapter script.
  */
 import { synthesizeEmaWav, ensureEma, type EmaLoadProgress } from '@/lib/emaEngine'
+import {
+  getCachedSegment,
+  putCachedSegment,
+} from '@/lib/mindmapLesson/wavCache'
 import type {
   LessonSegment,
   LessonStep,
@@ -40,6 +45,8 @@ export async function synthesizeLessonTimeline(
   opts: {
     signal?: AbortSignal
     speed?: number
+    /** IndexedDB cache namespace (chapter + script hash) */
+    cacheKey?: string | null
     /** How many segments to keep ready ahead of playhead (default 2) */
     lookahead?: number
     /** Current playing segment index (live) */
@@ -59,9 +66,10 @@ export async function synthesizeLessonTimeline(
   let cursor = 0
   const gap = 0.18
   const lookahead = Math.max(1, opts.lookahead ?? DEFAULT_LOOKAHEAD)
+  const speed = opts.speed ?? 1
+  const cacheKey = opts.cacheKey || null
 
   async function waitIfBuffered() {
-    // Keep UI alive while we have enough audio ahead of the listener
     while (
       !opts.signal?.aborted &&
       segments.length > 0 &&
@@ -86,6 +94,8 @@ export async function synthesizeLessonTimeline(
     }
   }
 
+  let consecutiveFails = 0
+
   for (let i = 0; i < steps.length; i++) {
     if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     await waitIfPaused()
@@ -102,21 +112,39 @@ export async function synthesizeLessonTimeline(
     })
 
     try {
-      const result = await synthesizeEmaWav(step.text, {
-        play: false,
-        speed: opts.speed ?? 1,
-        signal: opts.signal,
-        shouldPause: opts.shouldPause,
-      })
+      let blob: Blob
+      let timings: {
+        duration: number
+        words: Array<{ word: string; start: number; end: number }>
+      }
+
+      const cached =
+        cacheKey ? await getCachedSegment(cacheKey, step.id) : null
+      if (cached) {
+        blob = cached.blob
+        timings = cached.timings
+      } else {
+        const result = await synthesizeEmaWav(step.text, {
+          play: false,
+          speed,
+          signal: opts.signal,
+          shouldPause: opts.shouldPause,
+        })
+        blob = result.blob
+        timings = result.timings
+        if (cacheKey) {
+          void putCachedSegment(cacheKey, step.id, blob, result.timings)
+        }
+      }
       if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
 
       const start = cursor
       const dur = Math.max(
-        result.timings.duration,
-        result.timings.words.at(-1)?.end ?? 0.4,
+        timings.duration,
+        timings.words.at(-1)?.end ?? 0.4,
       )
       const end = start + dur
-      for (const w of result.timings.words) {
+      for (const w of timings.words) {
         words.push({
           w: w.word,
           s: start + w.start,
@@ -133,19 +161,24 @@ export async function synthesizeLessonTimeline(
         camera: step.camera,
         start,
         end,
-        blob: result.blob,
+        blob,
       })
       cursor = end + gap
+      consecutiveFails = 0
       opts.onPartial?.({
         totalDuration: cursor,
         words: [...words],
         segments: [...segments],
       })
-      // Let React / clicks run between heavy ORT segments
       await yieldToUi()
     } catch (err) {
       if ((err as DOMException)?.name === 'AbortError') throw err
+      consecutiveFails += 1
       console.warn('[lessonTts] segment skipped', step.id, err)
+      if (consecutiveFails >= 3) {
+        if (segments.length) break
+        throw err
+      }
       await yieldToUi()
     }
   }

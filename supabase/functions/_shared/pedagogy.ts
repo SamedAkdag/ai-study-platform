@@ -150,9 +150,10 @@ Return VALID JSON only:
 
 Kurallar:
 - 6–14 ana başlık; children ŞİMDİLİK boş dizi [].
-- Kaynak: PDF ADAY BAŞLIKLAR (L1) + SAYFA ATLASI.
-- Kısa etiket (2–8 kelime); cümle yok; uydurma yok.
-- Sayfa sırası; atlas aralığını kapsa.`
+- Kaynak: PDF ADAY BAŞLIKLAR (L1) + SAYFA ATLASI — gerçek KONU adları.
+- label = TAM isim öbeği (≤6 kelime). İyi: "Limit Tanımı", "Süreklilik". Kötü: "Limit bir noktaya yaklaşırken".
+- YASAK: yarım cümle, tanım cümlesi, "Birinci bölüm / Bölüm 1 / Ana başlık", yalnız sayı.
+- narration ayrı alan — label’e yazma. Uydurma yok. Sayfa sırası; atlas aralığını kapsa.`
 }
 
 export function mindMapFillPrompt(): string {
@@ -169,9 +170,10 @@ Return VALID JSON only:
 
 Kurallar:
 - Ana başlık label/page’lerini koru (silme / birleştirme minimal).
-- Her branch’e 2–6 children = o başlığın ALT BAŞLIKLARI.
-- Children kısa isim; cümle / Tanım: / çünkü YASAK.
-- L2 aday başlıklar + atlas konularını kullan; uydurma yok.`
+- Her branch’e 2–6 children = o başlığın ALT KONU isim öbekleri (≤6 kelime).
+- YASAK: yarım cümle, tanım cümlesi, "Tanım:", çünkü, Birinci bölüm.
+- İyi: "Sağdan Limit". Kötü: "x sağdan a'ya yaklaşırken".
+- L2 aday başlıklar + atlas; uydurma yok. narration ≠ label.`
 }
 
 export function mindMapSystemPrompt(): string {
@@ -184,8 +186,9 @@ GÖREV: PDF kaynağından İÇİNDEKİLER ağacı.
 - central, branches[].label (ana), branches[].children (alt), branches[].page
 
 Kurallar:
-- 6–14 ana; her birinde 2–6 alt başlık.
-- Kısa etiket; cümle yasak; şablon “Özet/Sınav kartı” yasak.
+- 6–14 ana; her birinde 2–6 alt — hepsi TAM isim öbeği (≤6 kelime).
+- YASAK: yarım cümle / tanım cümlesi / “Özet / Birinci bölüm / Bölüm N”.
+- İyi: "Limit Tanımı". Kötü: "Limit bir noktaya". narration ayrı alan.
 - Atlas sayfalarını kapsa; uydurma yok.
 
 Return VALID JSON only:
@@ -247,4 +250,41 @@ KURALLAR:
 - TEK PARÇA konuşma (TTS). "Bakın…", "Şimdi netleştirelim…"
 - Tablo (|), madde, ##, LaTeX YASAK. Etkiyi cümleyle söyle.
 - Sadece verilen bağlam; uydurma. ~100–180 kelime. JSON yok.`
+}
+
+/**
+ * Map-ordered lesson script: one teacher, hub → branch → leaf narrations.
+ * Labels stay short noun phrases; spoken teaching lives in narration fields.
+ */
+export function lessonScriptSystemPrompt(): string {
+  return `${LECTURE_SPEECH_PERSONA_TR}
+
+GÖREV: Verilen ZİHİN HARİTASI iskeletine kilitli DERS ANLATIMI yaz.
+Öğrenci haritada düğüm düğüm gezecek; her düğümün kendi öğretmen konuşması olsun.
+
+${LECTURE_SPEECH_STYLE_TR}
+
+HARİTA KURALLARI:
+- central / branches[].label / children[] İSİMLERİNİ AYNEN KORU (silme, birleştirme, yeniden adlandırma YASAK).
+- label’ler kısa isim öbeği kalır; tanım/örnek/benzetme SADECE narration alanlarında.
+- mind_map.narration = omurga açılışı (4–8 cümle): ne öğreneceğiz, neden önemli.
+- Her branch.narration = o ana başlığın dersi (4–7 cümle).
+- child_narrations[i] = children[i] ile hizalı yaprak anlatımı (3–5 cümle); sayı eşleşmeli.
+- Kaynakta yoksa uydurma; emin değilsen “notlarda net değil” de.
+- Markdown / tablo / ## / madde listesi YASAK — düz konuşma.
+
+Return VALID JSON only:
+{
+  "mind_map":{
+    "central":"…",
+    "narration":"…",
+    "branches":[{
+      "label":"…",
+      "page":12,
+      "narration":"…",
+      "children":["…"],
+      "child_narrations":["…","…"]
+    }]
+  }
+}`
 }

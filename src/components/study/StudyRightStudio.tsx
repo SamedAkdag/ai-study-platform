@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
-export type ReadStudioTab = 'map' | 'guide' | 'audio'
+export type ReadStudioTab = 'hub' | 'prose' | 'map' | 'guide' | 'audio'
 
 export type StudioToolItem = {
   id: string
@@ -16,7 +16,7 @@ export type StudioToolItem = {
 }
 
 type StudioTab = {
-  id: ReadStudioTab
+  id: Exclude<ReadStudioTab, 'hub' | 'prose'>
   label: string
   title: string
   hidden?: boolean
@@ -25,9 +25,11 @@ type StudioTab = {
 type Props = {
   /** Studio tools (Anlatım / Harita / …) — only when reading */
   showStudio?: boolean
-  active?: ReadStudioTab | null
-  onChange?: (tab: ReadStudioTab | null) => void
+  active?: ReadStudioTab
+  onChange?: (tab: ReadStudioTab) => void
   hasMap?: boolean
+  /** Hide Galeri tile (shared / no lobby). */
+  showHub?: boolean
   /** Shared utilities: Flash, İndir, PDF, … */
   tools?: StudioToolItem[]
   panel?: ReactNode
@@ -203,9 +205,10 @@ function iconForToolId(id: string): StudioIconName {
  */
 export default function StudyRightStudio({
   showStudio = false,
-  active = null,
+  active = 'hub',
   onChange,
   hasMap = true,
+  showHub = true,
   tools = [],
   panel,
   panelOpen,
@@ -226,7 +229,7 @@ export default function StudyRightStudio({
     {
       id: 'audio',
       label: 'Dinle',
-      title: 'Hoca harita turu · düğüm düğüm anlatım',
+      title: 'Dersi dinle · hoca harita turu',
     },
   ]
   const visibleStudio = showStudio
@@ -306,13 +309,28 @@ export default function StudyRightStudio({
                 role="tablist"
                 aria-label="Stüdyo"
               >
+                {showHub ? (
+                  <button
+                    type="button"
+                    role="tab"
+                    className={`studio-rail__tile ${active === 'hub' ? 'is-active' : ''}`}
+                    aria-selected={active === 'hub'}
+                    title="Araç galerisi"
+                    onClick={() => onChange('hub')}
+                  >
+                    <span className="studio-rail__tile-ico">
+                      <StudioIcon name="tools" />
+                    </span>
+                    <span className="studio-rail__tile-label">Galeri</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   role="tab"
-                  className={`studio-rail__tile ${active === null ? 'is-active' : ''}`}
-                  aria-selected={active === null}
+                  className={`studio-rail__tile ${active === 'prose' || (!showHub && active === 'hub') ? 'is-active' : ''}`}
+                  aria-selected={active === 'prose' || (!showHub && active === 'hub')}
                   title="Konu anlatımı"
-                  onClick={() => onChange(null)}
+                  onClick={() => onChange('prose')}
                 >
                   <span className="studio-rail__tile-ico">
                     <StudioIcon name="narrate" />
@@ -327,7 +345,7 @@ export default function StudyRightStudio({
                     className={`studio-rail__tile ${active === t.id ? 'is-active' : ''}`}
                     aria-selected={active === t.id}
                     title={t.title}
-                    onClick={() => onChange(active === t.id ? null : t.id)}
+                    onClick={() => onChange(t.id)}
                   >
                     <span className="studio-rail__tile-ico">
                       <StudioIcon

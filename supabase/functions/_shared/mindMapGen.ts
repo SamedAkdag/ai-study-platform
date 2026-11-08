@@ -15,73 +15,232 @@ export type MindMap = {
   }>
 }
 
-/** Compress a sentence/dump into a short topic heading. */
-export function toTopicLabel(
-  raw: string,
-  maxWords = 5,
-  maxChars = 36,
-): string {
+/**
+ * Empty structural shells: "Birinci bölüm", "Bölüm 2", "Ana başlık 3", …
+ */
+export function isGenericSectionLabel(raw: string): boolean {
+  const s = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!s) return true
+  if (
+    /^(birinci|ikinci|üçüncü|ucuncu|dördüncü|dorduncu|beşinci|besinci|altıncı|altinci|yedinci|sekizinci|dokuzuncu|onuncu)\s+(bölüm|bolum|kısım|kisim|ünite|unite|section|chapter|part)\b/i.test(
+      s,
+    )
+  ) {
+    return true
+  }
+  if (
+    /^(bölüm|bolum|kısım|kisim|ünite|unite|section|chapter|part|unit)\s*[:.\-]?\s*\d+[a-z]?\s*$/i.test(
+      s,
+    )
+  ) {
+    return true
+  }
+  if (
+    /^\d+\s*[.)]?\s*(bölüm|bolum|kısım|kisim|section|chapter|part|ünite|unite)\s*$/i.test(
+      s,
+    )
+  ) {
+    return true
+  }
+  if (/^(ana\s+başlık|alt\s+başlık|başlık|konu)\s*\d*$/i.test(s)) return true
+  if (
+    /^(özet|ozet|giriş|giris|sonuç|sonuc|genel\s+bakış|genel\s+bakis|içindekiler|icindekiler)$/i.test(
+      s,
+    )
+  ) {
+    return true
+  }
+  return false
+}
+
+/** Title text after stripping leading section numbers / "Bölüm N:". */
+export function topicTitleCore(raw: string): string {
+  return String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^((\d+\.)+\d*)\s+/, '')
+    .replace(
+      /^(bölüm|bolum|chapter|section|unit|kısım|kisim|ünite|unite)\s*\d*\s*[:.\-]?\s*/i,
+      '',
+    )
+    .trim()
+}
+
+/** Predicate / clause cues — mind-map nodes must NOT be sentence scraps. */
+const SENTENCE_LIKE_RE =
+  /\b(dır|dir|tır|tir|dur|dür|tur|tür|edir|adır|abilir|ebilir|mektedir|maktadır|olur|eder|yapar|sağlar|saglar|içerir|icerir|anlamına|anlamina|gösterir|gosterir|belirler|ifade\s+eder|söz\s+konusu|şeklinde|seklinde|olarak\s+adlandır|olarak\s+adlandir|denir|edilir|yapılır|yapilir|alınır|alinir|hesaplanır|hesaplanir|yaklaşır|yaklasir|yaklaşırken|yaklasirken|giderken|gelirken|bulunur|verilir|yazılır|yazilir|tanımlanır|tanimlanir|anlaşılır|anlasilir)\b/i
+
+const HANGING_END_RE =
+  /\b(ve|veya|ile|için|icin|olan|olarak|gibi|kadar|de|da|ki|bu|şu|su|bir|the|of|to|for|that|which|iken)$/i
+
+const WEAK_START_RE =
+  /^(bu|şu|su|bir|the|a|an|tanım|tanim|yani|örneğin|ornegin|şekilde|sekilde|şöyle|soyle|neden|nasıl|nasil|eğer|eger|ise)\b/i
+
+/** Adverbial participle scrap: "yaklaşırken", "giderken" (not short roots like "etken") */
+const PARTICIPLE_SCRAP_RE =
+  /\w{4,}(ırken|irken|arken|erken|urken|ürken)\b/i
+
+/**
+ * True for half-sentences / definition scraps unfit as TOC node titles.
+ * Good: "Limit Tanımı". Bad: "Limit bir noktaya yaklaşırken", "olan fonksiyon".
+ */
+export function isSentenceFragmentLabel(raw: string): boolean {
+  const s = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!s) return true
+  if (SENTENCE_LIKE_RE.test(s)) return true
+  if (HANGING_END_RE.test(s)) return true
+  if (PARTICIPLE_SCRAP_RE.test(s)) return true
+  if (/…|\.{2,}$/.test(s) || /,$/.test(s)) return true
+  const words = s.split(/\s+/).filter(Boolean)
+  if (WEAK_START_RE.test(s) && words.length >= 3) return true
+  // Relative-clause dumps used as titles
+  if (
+    /\b(olan|olduğu|oldugu|edilen|yapılan|yapilan|gösterilen|gosterilen|alınan|alinan|bulunan|verilen|yazılan|yazilan)\b/i.test(
+      s,
+    ) &&
+    words.length >= 3
+  ) {
+    return true
+  }
+  // Definition scrap: "Limit bir noktaya …" (noun + bir + dative noun)
+  if (/\b\w{3,}\s+bir\s+\w{3,}(ya|ye|a|e)\b/i.test(s) && words.length >= 3) {
+    return true
+  }
+  // Too long for a node title → almost always a clipped sentence
+  if (words.length > 6) return true
+  return false
+}
+
+/**
+ * Reject numbers-only, ordinal shells, OCR scraps, mid-word cuts,
+ * and half-sentence / definition fragments.
+ */
+export function isWeakTopicLabel(raw: string): boolean {
+  if (isGenericSectionLabel(raw)) return true
+  const s = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!s || s.length < 4) return true
+  if (/^[\d.\-–—)\]]+$/.test(s)) return true
+  if (/^\d+(\.\d+){0,5}\.?$/.test(s)) return true
+  if (/^[\d.\s\-–—]+$/.test(s)) return true
+  if (isSentenceFragmentLabel(s)) return true
+
+  const core = topicTitleCore(s)
+  if (!core || core.length < 4) return true
+  if (isSentenceFragmentLabel(core)) return true
+
+  const letters = core.replace(/[^A-Za-zÇĞİÖŞÜçğıöşü]/g, '')
+  if (letters.length < 6) return true
+
+  const words = core.split(/\s+/).filter(Boolean)
+  const contentWords = words.filter(
+    (w) => !/^\d+([.\-]\d+)*\.?$/.test(w) && /[A-Za-zÇĞİÖŞÜçğıöşü]{2,}/i.test(w),
+  )
+  if (contentWords.length < 1) return true
+
+  if (/[-–—]$/.test(s) || /[-–—]$/.test(core)) return true
+  const last = contentWords[contentWords.length - 1] || ''
+  // Half-word leftovers from char caps (e.g. "Sürekl")
+  if (
+    last.length >= 5 &&
+    last.length <= 10 &&
+    !/(lar|ler|lık|lik|luk|lük|mak|mek|ası|esi|ması|mesi|nin|nın|nun|nün|den|dan|ile)$/i.test(
+      last,
+    ) &&
+    !/[aeıioöuüAEIİOÖUÜ]$/.test(last) &&
+    letters.length < 18
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Mind-map node title: complete noun-phrase only.
+ * Never chop a definition/sentence into a hanging fragment — reject instead.
+ */
+export function toMindMapNodeLabel(raw: string): string {
   let s = String(raw || '')
     .replace(/\s+/g, ' ')
     .trim()
   if (!s) return ''
 
   s = s.replace(
-    /^(tanım|tanim|nasıl|nasil|ilişki|iliski|tuzak|sınav|sinav|örnek|ornek|dikkat|önemli|onemli|özet|ozet|kavram|formül|formul|adım|adim|süreç|surec|neden|ne)\s*[:：\-–]\s*/i,
+    /^(tanım|tanim|kavram|başlık|baslik|konu|özet|ozet|madde)\s*[:：\-–]\s*/i,
     '',
   )
   const quoted = s.match(/^["“«]([^"”»]{2,48})["”»]/)
   if (quoted?.[1]) s = quoted[1].trim()
 
-  s =
-    s.split(
-      /\s+(?:çünkü|zira|ancak|fakat|yani|örneğin|ornegin|bu nedenle|dolayısıyla|dolayisiyla)\s+/i,
-    )[0] || s
   s = s.split(/[.!?;]/)[0] || s
-  s = s.split(/\s+[—–]\s+/)[0] || s
   s = s.replace(/\s*\([^)]{0,80}\)\s*$/g, '').trim()
-
-  const words = s.split(/\s+/).filter(Boolean)
-  // Short heading already — leave as TOC label
-  if (
-    words.length <= maxWords &&
-    s.length <= maxChars &&
-    !/(?:dır|dir|tır|tir|çünkü|olan|için|icin)\b/i.test(s)
-  ) {
-    return s.replace(/^[\s\-–—:·]+|[\s\-–—:·,]+$/g, '').trim()
-  }
-
-  const looksSentence =
-    words.length > maxWords ||
-    /(?:dır|dir|tır|tir|dur|dür|tur|tür|abilir|ebilir|mektedir|mektedir|olur|eder|yapar|sağlar|saglar|içerir|icerir|anlamına|anlamina)\b/i.test(
-      s,
-    )
-
-  if (looksSentence) {
-    const dropLead = /^(bir|bu|şu|su|o|her|çok|cok|daha|en)$/i
-    const picked: string[] = []
-    for (const w of words) {
-      if (picked.length === 0 && dropLead.test(w)) continue
-      if (
-        picked.length >= 2 &&
-        /^(olan|olarak|için|icin|ile|ve|veya|gibi|kadar)$/i.test(w)
-      ) {
-        break
-      }
-      picked.push(w.replace(/[,\u2019']/g, ''))
-      if (picked.length >= maxWords) break
-    }
-    s = picked.join(' ')
-  }
-
   s = s.replace(/^[\s\-–—:·]+|[\s\-–—:·,]+$/g, '').trim()
-  if (!s) return ''
-  if (s.length > maxChars) {
-    const cut = s.slice(0, maxChars)
-    const sp = cut.lastIndexOf(' ')
-    s = (sp > 10 ? cut.slice(0, sp) : cut).trim()
+
+  // Already a clean short title
+  const words = s.split(/\s+/).filter(Boolean)
+  if (
+    words.length >= 1 &&
+    words.length <= 6 &&
+    s.length <= 52 &&
+    !isWeakTopicLabel(s)
+  ) {
+    return s
   }
-  return s
+
+  // Try phrase before first predicate — only keep if result is a full NP title
+  const beforePred = s
+    .split(
+      /\s+(?:dır|dir|tır|tir|olan|için|icin|çünkü|cunku|ise|ki|ve\s+bu|veya|bir\s+)\s*/i,
+    )[0]
+    ?.trim()
+  if (
+    beforePred &&
+    beforePred !== s &&
+    beforePred.split(/\s+/).length >= 1 &&
+    beforePred.split(/\s+/).length <= 5 &&
+    beforePred.length >= 4 &&
+    !isWeakTopicLabel(beforePred)
+  ) {
+    return beforePred
+  }
+
+  // Do NOT return half-sentences / chopped definitions
+  return ''
+}
+
+/** Compress text to a short heading; mind-map callers should prefer toMindMapNodeLabel. */
+export function toTopicLabel(
+  raw: string,
+  maxWords = 5,
+  maxChars = 48,
+): string {
+  // Mind-map style: refuse sentence scraps instead of truncating them
+  const node = toMindMapNodeLabel(raw)
+  if (node) {
+    const words = node.split(/\s+/).filter(Boolean)
+    if (words.length <= maxWords && node.length <= maxChars) return node
+    // Soft trim only on already-clean noun phrases, at word boundary
+    if (words.length > maxWords) {
+      const clipped = words.slice(0, maxWords).join(' ')
+      return isWeakTopicLabel(clipped) ? '' : clipped
+    }
+    if (node.length > maxChars) {
+      const cut = node.slice(0, maxChars)
+      const sp = cut.lastIndexOf(' ')
+      if (sp > 8) {
+        const clipped = cut.slice(0, sp).trim()
+        return isWeakTopicLabel(clipped) ? '' : clipped
+      }
+      return ''
+    }
+    return node
+  }
+  return ''
 }
 
 export function parseMindMap(
@@ -117,8 +276,17 @@ export function parseMindMap(
         narration?: unknown
         child_narrations?: unknown
       }
-      const label = toTopicLabel(String(row.label || ''), 6, 40)
+      let label = toMindMapNodeLabel(String(row.label || ''))
       if (!label) continue
+      // Promote a real child topic over shell / scrap labels
+      if (isWeakTopicLabel(label) && Array.isArray(row.children)) {
+        const promoted = row.children
+          .map((c) => toMindMapNodeLabel(String(c || '')))
+          .find((c) => c && !isWeakTopicLabel(c))
+        if (promoted) label = promoted
+        else continue
+      }
+      if (isWeakTopicLabel(label)) continue
       const key = label.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)
@@ -130,9 +298,10 @@ export function parseMindMap(
             typeof c === 'object' && c
               ? String((c as { label?: unknown }).label || '').trim()
               : String(c || '').trim()
-          const topic = toTopicLabel(cl, 4, 32)
+          const topic = toMindMapNodeLabel(cl)
           const ck = topic.toLowerCase()
           if (!topic || ck === key || childSeen.has(ck)) continue
+          if (isWeakTopicLabel(topic)) continue
           if (
             /^(giriş|özet|ozet|tanımlar|tanimlar|uygulama|sonuç|sonuc|genel)$/i.test(
               topic,
@@ -198,7 +367,7 @@ export function mindMapFallback(
 }
 
 const SKIP_HEADING =
-  /^(özet|ozet|sınav kartı|sinav kartı|sık yapılan|anahtar noktalar|neden önemli|günlük hayattan|adım adım|bölüm\s*\d+|detay\s*\d+)/i
+  /^(özet|ozet|sınav kartı|sinav kartı|sık yapılan|anahtar noktalar|neden önemli|günlük hayattan|adım adım|bölüm\s*\d+|detay\s*\d+|birinci\s+bölüm|ikinci\s+bölüm|üçüncü\s+bölüm|ucuncu\s+bolum)/i
 
 function cleanHeading(raw: string): string {
   return String(raw || '')
@@ -229,10 +398,11 @@ export function extractHeadingInventory(markdown: string): string {
 
 function looksLikePdfHeading(line: string): boolean {
   const s = line.replace(/\s+/g, ' ').trim()
-  if (s.length < 3 || s.length > 90) return false
+  if (s.length < 6 || s.length > 90) return false
   if (/https?:\/\//i.test(s)) return false
-  if (/^\d+$/.test(s)) return false
+  if (/^\d+$/.test(s) || /^[\d.\-–—]+$/.test(s)) return false
   if (/^[•·\-–—*]\s/.test(s)) return false
+  if (isWeakTopicLabel(s)) return false
   // Skip obvious body sentences
   if (/\b(çünkü|ancak|fakat|şöyle ki|olarak kabul|görülür|edilir)\b/i.test(s)) {
     return false
@@ -241,15 +411,25 @@ function looksLikePdfHeading(line: string): boolean {
   const words = s.split(/\s+/).filter(Boolean)
   if (words.length < 1 || words.length > 14) return false
 
-  // Numbered textbook headings: 3.1 Title / 3.1.2 Title
-  if (/^(\d+\.)+\d*\s+\S/.test(s)) return true
-  if (/^(bölüm|bolum|chapter|unit|section|kısım|kisim)\b/i.test(s)) return true
-  // Short line without sentence end → likely heading
-  if (!/[.!?]$/.test(s) && words.length <= 10) return true
-  // ALL-CAPS short headings
   const letters = s.replace(/[^A-Za-zÇĞİÖŞÜçğıöşü]/g, '')
+  if (letters.length < 6) return false
+
+  // Numbered textbook headings: 3.1 Title — require real title text
+  if (/^(\d+\.)+\d*\s+\S/.test(s)) {
+    return topicTitleCore(s).replace(/[^A-Za-zÇĞİÖŞÜçğıöşü]/g, '').length >= 6
+  }
+  // "Bölüm 3: Limitler" OK — bare "Bölüm 1" rejected by isWeakTopicLabel
   if (
-    letters.length >= 4 &&
+    /^(bölüm|bolum|chapter|unit|section|kısım|kisim)\b/i.test(s) &&
+    !isWeakTopicLabel(s)
+  ) {
+    return true
+  }
+  // Short line without sentence end → likely heading
+  if (!/[.!?]$/.test(s) && words.length <= 10 && letters.length >= 8) return true
+  // ALL-CAPS short headings
+  if (
+    letters.length >= 6 &&
     letters === letters.toUpperCase() &&
     words.length <= 12
   ) {
@@ -269,11 +449,10 @@ function pdfHeadingLevel(line: string): number {
 }
 
 function cleanPdfHeadingLabel(line: string): string {
-  let s = cleanHeading(line)
-  // Keep "3.1 Title" readable but cap length
-  s = s.replace(/\s+/g, ' ').trim()
-  if (s.length > 52) s = s.slice(0, 50).trim()
-  return toTopicLabel(s, 8, 52) || s.slice(0, 52)
+  const s = cleanHeading(line).replace(/\s+/g, ' ').trim()
+  const labeled = toTopicLabel(s, 8, 56)
+  if (!labeled || isWeakTopicLabel(labeled)) return ''
+  return labeled
 }
 
 export type PdfTocCandidate = {
@@ -299,7 +478,9 @@ export function extractPdfTocCandidates(pageText: string): PdfTocCandidate[] {
     for (const line of scan) {
       if (!looksLikePdfHeading(line)) continue
       const label = cleanPdfHeadingLabel(line)
-      if (!label || SKIP_HEADING.test(label)) continue
+      if (!label || SKIP_HEADING.test(label) || isWeakTopicLabel(label)) {
+        continue
+      }
       const key = `${p.page}:${label.toLowerCase()}`
       if (seen.has(key)) continue
       seen.add(key)
@@ -336,6 +517,7 @@ export function buildMindMapFromPdf(
   let cur: Branch | null = null
 
   const pushBranch = (label: string, page: number) => {
+    if (isWeakTopicLabel(label)) return
     const exists = branches.find(
       (b) => b.label.toLowerCase() === label.toLowerCase(),
     )
@@ -349,6 +531,7 @@ export function buildMindMapFromPdf(
 
   const pushChild = (label: string) => {
     if (!cur) return
+    if (isWeakTopicLabel(label)) return
     if (label.toLowerCase() === cur.label.toLowerCase()) return
     if (!cur.children.some((c) => c.toLowerCase() === label.toLowerCase())) {
       cur.children.push(label)
@@ -370,8 +553,8 @@ export function buildMindMapFromPdf(
   // page_sources: first topic = ana başlık (if missing), rest = alt başlık
   for (const src of pageSources) {
     const topics = (src.topics ?? [])
-      .map((t) => toTopicLabel(String(t), 6, 40))
-      .filter(Boolean)
+      .map((t) => toTopicLabel(String(t), 7, 52))
+      .filter((t): t is string => !!t && !isWeakTopicLabel(t))
     if (!topics.length) continue
 
     let branch = branches.find((b) => b.page === src.page)
@@ -461,8 +644,8 @@ export function buildOutlineMindMap(
     const h3 = line.match(/^###\s+(.+?)\s*$/)
     if (h2) {
       const raw = cleanHeading(h2[1] || '')
-      const label = toTopicLabel(raw, 6, 40)
-      if (!label || SKIP_HEADING.test(label)) {
+      const label = toTopicLabel(raw, 7, 52)
+      if (!label || SKIP_HEADING.test(label) || isWeakTopicLabel(label)) {
         cur = null
         continue
       }
@@ -476,10 +659,11 @@ export function buildOutlineMindMap(
       continue
     }
     if (h3 && cur) {
-      const label = toTopicLabel(cleanHeading(h3[1] || ''), 5, 32)
+      const label = toTopicLabel(cleanHeading(h3[1] || ''), 6, 48)
       if (
         !label ||
         SKIP_HEADING.test(label) ||
+        isWeakTopicLabel(label) ||
         label.toLowerCase() === cur.label.toLowerCase()
       ) {
         continue
@@ -493,8 +677,8 @@ export function buildOutlineMindMap(
   // Attach page topics as alt başlık under matching / nearest branch
   for (const src of pageSources) {
     const topics = (src.topics ?? [])
-      .map((t) => toTopicLabel(String(t), 4, 32))
-      .filter(Boolean)
+      .map((t) => toTopicLabel(String(t), 6, 48))
+      .filter((t): t is string => !!t && !isWeakTopicLabel(t))
     if (!topics.length) continue
 
     let branch =
@@ -540,8 +724,8 @@ export function buildOutlineMindMap(
     const fromPages: Branch[] = []
     for (const src of pageSources.slice(0, 12)) {
       const topics = (src.topics ?? [])
-        .map((t) => toTopicLabel(String(t), 4, 32))
-        .filter(Boolean)
+        .map((t) => toTopicLabel(String(t), 6, 48))
+        .filter((t): t is string => !!t && !isWeakTopicLabel(t))
       if (!topics.length) continue
       fromPages.push({
         label: topics[0]!,
@@ -585,30 +769,335 @@ export function pickBetterMindMap(
   const score = (m: MindMap) => {
     let s = m.branches.length * 3
     let filled = 0
+    let weak = 0
     for (const b of m.branches) {
+      if (isWeakTopicLabel(b.label)) {
+        weak += 1
+        s -= 14
+      } else {
+        s += 2
+      }
       const kids = b.children ?? []
       if (kids.length >= 2) filled += 1
       s += Math.min(kids.length, 6) * 2
       for (const c of kids) {
-        if (c.length > 40) s -= 3
+        if (isWeakTopicLabel(c)) {
+          weak += 1
+          s -= 5
+        }
+        if (c.length > 56) s -= 3
         if (/\b(dır|dir|çünkü|olan|için)\b/i.test(c)) s -= 3
-        if (c.split(/\s+/).length <= 6) s += 1
+        if (c.split(/\s+/).length <= 7) s += 1
       }
     }
     s += filled * 4
+    if (weak >= Math.max(2, Math.ceil(m.branches.length * 0.3))) s -= 50
     return s
   }
 
-  // Trust a substantial LLM tree over a thin auto-outline
-  const llmFilled = llm.branches.filter(
-    (b) => (b.children?.length ?? 0) >= 2,
+  const llmWeak = llm.branches.filter((b) => isWeakTopicLabel(b.label)).length
+  // Numbers / half-names / ordinal shells → keep deterministic outline
+  if (llmWeak >= Math.max(1, Math.ceil(llm.branches.length * 0.25))) {
+    return outline
+  }
+
+  const outlineGood = outline.branches.filter(
+    (b) => !isWeakTopicLabel(b.label),
   ).length
+  const llmFilled = llm.branches.filter(
+    (b) => (b.children?.length ?? 0) >= 2 && !isWeakTopicLabel(b.label),
+  ).length
+
+  // Prefer a solid notes/PDF outline over a flashy but messy LLM tree
+  if (outlineGood >= 4 && llmFilled < 4) return outline
+
   if (llm.branches.length >= 6 && llmFilled >= 4) return llm
   if (llm.branches.length > outline.branches.length + 1 && llmFilled >= 3) {
     return llm
   }
 
   return score(llm) >= score(outline) ? llm : outline
+}
+
+/** Count how many branch labels look like scraps / numbers / shells. */
+export function weakMindMapLabelRatio(map: MindMap | null): number {
+  if (!map?.branches?.length) return 1
+  const weak = map.branches.filter((b) => isWeakTopicLabel(b.label)).length
+  return weak / map.branches.length
+}
+
+function goodBranchCount(map: MindMap | null): number {
+  if (!map?.branches?.length) return 0
+  return map.branches.filter((b) => !isWeakTopicLabel(b.label)).length
+}
+
+/**
+ * Prefer PDF / notes TOC over LLM when Ling invents numbers & half-names.
+ * Call LLM only if deterministic sources are thin; discard weak LLM trees.
+ */
+export function assembleMindMap(input: {
+  title: string
+  pdfMap: MindMap | null
+  notesOutline: MindMap | null
+  llmMap: MindMap | null
+  concepts?: string[]
+}): MindMap {
+  const { title, pdfMap, notesOutline, llmMap, concepts = [] } = input
+  const det = pickBetterMindMap(pdfMap, notesOutline)
+  const detGood = goodBranchCount(det)
+  const llmGood = goodBranchCount(llmMap)
+  const llmWeak = weakMindMapLabelRatio(llmMap)
+
+  let chosen: MindMap | null = null
+  if (detGood >= 4 && (llmWeak > 0.2 || llmGood < detGood)) {
+    chosen = det
+  } else if (llmMap && llmWeak <= 0.2 && llmGood >= 3) {
+    chosen = pickBetterMindMap(det, llmMap) || llmMap || det
+  } else {
+    chosen = det || (llmWeak <= 0.35 ? llmMap : null)
+  }
+
+  if (!chosen || goodBranchCount(chosen) < 2) {
+    chosen = mindMapFallback(title, concepts)
+  }
+  return chosen
+}
+
+/** Aşama 1 shape: real topic hubs, empty children. */
+export function toSkeletonMindMap(map: MindMap, maxBranches = 9): MindMap {
+  const branches = map.branches
+    .map((b) => {
+      const label = toMindMapNodeLabel(b.label)
+      if (!label || isWeakTopicLabel(label)) return null
+      return {
+        label,
+        children: [] as string[],
+        ...(typeof b.page === 'number' && b.page >= 1 ? { page: b.page } : {}),
+      }
+    })
+    .filter((b): b is NonNullable<typeof b> => !!b)
+    .slice(0, maxBranches)
+  return {
+    central:
+      toMindMapNodeLabel(map.central) ||
+      toTopicLabel(map.central, 5, 40) ||
+      map.central,
+    branches,
+  }
+}
+
+/** Compact skeleton for LLM fill prompt (labels + pages only). */
+export function skeletonForFillPrompt(map: MindMap): string {
+  const skel = toSkeletonMindMap(map)
+  return JSON.stringify({
+    central: skel.central,
+    branches: skel.branches.map((b) => ({
+      label: b.label,
+      page: b.page ?? null,
+      children: [],
+    })),
+  })
+}
+
+/**
+ * Merge Aşama2 fill onto Aşama1 skeleton: keep skeleton labels/pages,
+ * take filtered children from fill (or keep prior kids if fill empty).
+ */
+export function mergeMindMapFill(
+  skeleton: MindMap,
+  filled: MindMap | null,
+): MindMap {
+  if (!filled?.branches?.length) return skeleton
+  const byKey = new Map<string, MindMap['branches'][number]>()
+  for (const b of filled.branches) {
+    byKey.set(b.label.toLowerCase(), b)
+  }
+  const used = new Set<string>()
+  const branches = skeleton.branches.map((b) => {
+    const key = b.label.toLowerCase()
+    let hit = byKey.get(key)
+    if (!hit && typeof b.page === 'number') {
+      hit = filled.branches.find((f) => f.page === b.page)
+    }
+    if (hit) used.add(hit.label.toLowerCase())
+    const fromFill = (hit?.children ?? [])
+      .map((c) => toMindMapNodeLabel(c))
+      .filter(
+        (c): c is string =>
+          !!c &&
+          !isWeakTopicLabel(c) &&
+          c.toLowerCase() !== key,
+      )
+      .slice(0, 7)
+    const prior = (b.children ?? [])
+      .map((c) => toMindMapNodeLabel(c))
+      .filter(
+        (c): c is string =>
+          !!c && !isWeakTopicLabel(c) && c.toLowerCase() !== key,
+      )
+    const children = (fromFill.length >= 2 ? fromFill : prior.length ? prior : fromFill)
+      .slice(0, 7)
+    return {
+      ...b,
+      children,
+      ...(hit?.narration && !b.narration ? { narration: hit.narration } : {}),
+    }
+  })
+  // Append strong fill-only branches if skeleton was thin
+  if (branches.length < 5) {
+    for (const f of filled.branches) {
+      const k = f.label.toLowerCase()
+      if (used.has(k) || isWeakTopicLabel(f.label)) continue
+      const fl = toMindMapNodeLabel(f.label)
+      if (!fl) continue
+      branches.push({
+        label: fl,
+        page: f.page,
+        children: (f.children ?? [])
+          .map((c) => toMindMapNodeLabel(c))
+          .filter((c): c is string => !!c && !isWeakTopicLabel(c))
+          .slice(0, 7),
+      })
+      if (branches.length >= 9) break
+    }
+  }
+  return {
+    central: skeleton.central || filled.central,
+    ...(skeleton.narration || filled.narration
+      ? { narration: skeleton.narration || filled.narration }
+      : {}),
+    branches: branches.filter((b) => b.label && !isWeakTopicLabel(b.label)),
+  }
+}
+
+export type MindMapAskJson = (
+  task: string,
+) => Promise<Record<string, unknown>>
+
+export type TwoStageMindMapMeta = {
+  stage1: 'pdf_notes' | 'llm_skel' | 'fallback'
+  stage2: 'llm_fill' | 'deterministic' | 'skipped'
+  usedLlmSkel: boolean
+  usedLlmFill: boolean
+  skeletonBranches: number
+  finalBranches: number
+}
+
+/**
+ * Two-stage mind map (product port of the detailed PDF→mindmap contract):
+ * 1) Skeleton from PDF TOC + notes (LLM skel only if thin)
+ * 2) Fill children via LLM on locked skeleton labels, else deterministic kids
+ */
+export async function buildTwoStageMindMap(opts: {
+  title: string
+  pageText: string
+  pageSources: PageSource[]
+  notesMarkdown: string
+  concepts?: string[]
+  askJson: MindMapAskJson
+}): Promise<{ map: MindMap; meta: TwoStageMindMapMeta }> {
+  const title = opts.title
+  const concepts = opts.concepts ?? []
+  const pdfMap = buildMindMapFromPdf(title, opts.pageText, opts.pageSources)
+  const notesOutline = buildOutlineMindMap(
+    title,
+    opts.notesMarkdown,
+    opts.pageSources,
+  )
+  const det = pickBetterMindMap(pdfMap, notesOutline)
+  const detGood = goodBranchCount(det)
+
+  let skeleton: MindMap | null =
+    det && detGood >= 3 ? toSkeletonMindMap(det) : null
+  let stage1: TwoStageMindMapMeta['stage1'] = skeleton
+    ? 'pdf_notes'
+    : 'fallback'
+  let usedLlmSkel = false
+
+  if (!skeleton || goodBranchCount(skeleton) < 5) {
+    try {
+      const raw = await opts.askJson(taskMindMapSkeletonTask())
+      const llmSkel = parseMindMap(raw.mind_map ?? raw, title)
+      if (llmSkel && weakMindMapLabelRatio(llmSkel) <= 0.25) {
+        const cleaned = toSkeletonMindMap(llmSkel)
+        if (goodBranchCount(cleaned) >= goodBranchCount(skeleton)) {
+          skeleton = cleaned
+          stage1 = 'llm_skel'
+          usedLlmSkel = true
+        }
+      }
+    } catch {
+      /* keep deterministic */
+    }
+  }
+
+  if (!skeleton || goodBranchCount(skeleton) < 2) {
+    skeleton = toSkeletonMindMap(
+      mindMapFallback(title, concepts),
+    )
+    stage1 = 'fallback'
+  }
+
+  // Prefer richer children already on deterministic tree as fill baseline
+  const detWithKids =
+    det && goodBranchCount(det) >= 2
+      ? mergeMindMapFill(skeleton, det)
+      : skeleton
+
+  let stage2: TwoStageMindMapMeta['stage2'] = 'deterministic'
+  let usedLlmFill = false
+  let filled: MindMap | null = null
+  // Aşama 2 always attempted when skeleton is usable
+  if (goodBranchCount(skeleton) >= 3) {
+    try {
+      const raw = await opts.askJson(
+        taskMindMapFillTask(skeletonForFillPrompt(skeleton)),
+      )
+      filled = parseMindMap(raw.mind_map ?? raw, title)
+      if (filled && weakMindMapLabelRatio(filled) <= 0.3) {
+        usedLlmFill = true
+        stage2 = 'llm_fill'
+      } else {
+        filled = null
+      }
+    } catch {
+      filled = null
+    }
+  } else {
+    stage2 = 'skipped'
+  }
+
+  let map = mergeMindMapFill(detWithKids, filled)
+  if (weakMindMapLabelRatio(map) > 0.25 && det) {
+    map = mergeMindMapFill(toSkeletonMindMap(det), det)
+    stage2 = 'deterministic'
+    usedLlmFill = false
+  }
+  if (goodBranchCount(map) < 2) {
+    map = mindMapFallback(title, concepts)
+  }
+
+  return {
+    map,
+    meta: {
+      stage1,
+      stage2,
+      usedLlmSkel,
+      usedLlmFill,
+      skeletonBranches: skeleton.branches.length,
+      finalBranches: map.branches.length,
+    },
+  }
+}
+
+/** Local task strings — avoid circular import with cacheableChapter. */
+function taskMindMapSkeletonTask(): string {
+  return `MINDMAP_SKEL | Aşama1 | 5–9 ana | children=[] | label=TAM isim öbeği ≤6 kelime | İyi:"Limit Tanımı" Kötü:"Limit bir noktaya" | yarım cümle/tanım cümlesi YASAK | şema MINDMAP_SKEL`
+}
+
+function taskMindMapFillTask(skeletonJson: string): string {
+  const skel = skeletonJson.replace(/\s+/g, ' ').trim().slice(0, 1400)
+  return `MINDMAP_FILL | Aşama2 | label/page KORU | altlar=kısa isim öbeği (tanım/yarım cümle YASAK) | iskelet:${skel}`
 }
 
 export function cleanExcerpt(text: string, max = 220): string {

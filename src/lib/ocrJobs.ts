@@ -58,6 +58,17 @@ export function markOcrReady(bookId: string) {
   }
 }
 
+/** Allow a fresh OCR pass after a failed / cancelled job. */
+export function clearOcrReady(bookId: string) {
+  try {
+    localStorage.removeItem(ocrDoneKey(bookId))
+  } catch {
+    /* ignore */
+  }
+  cancelBackgroundOcr(bookId)
+  lastStatus.delete(bookId)
+}
+
 export function isOcrMarkedReady(bookId: string): boolean {
   try {
     return localStorage.getItem(ocrDoneKey(bookId)) === '1'
@@ -211,13 +222,19 @@ export function startBackgroundOcr(input: {
         engine: 'browser',
       })
     } catch (err) {
+      if ((err as DOMException)?.name === 'AbortError') return
       const msg = err instanceof Error ? err.message : String(err)
       emit({
         bookId,
         phase: 'error',
         done: 0,
         total: 0,
-        message: msg,
+        message:
+          /pdf bulunamadı|not found/i.test(msg)
+            ? 'PDF bulunamadı — aynı tarayıcıda yeniden yükle.'
+            : /memory|wasm|worker/i.test(msg)
+              ? 'OCR bu cihazda takıldı. Sayfayı yenileyip tekrar dene.'
+              : msg || 'OCR başarısız — tekrar dene.',
       })
     } finally {
       jobs.delete(bookId)
@@ -231,4 +248,14 @@ export function cancelBackgroundOcr(bookId: string) {
     ac.abort()
     jobs.delete(bookId)
   }
+}
+
+/** Restart OCR after error (clears ready flag + previous job). */
+export function restartBackgroundOcr(input: {
+  bookId: string
+  pages: PageText[]
+  file?: Blob | null
+}): void {
+  clearOcrReady(input.bookId)
+  startBackgroundOcr(input)
 }

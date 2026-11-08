@@ -23,25 +23,17 @@ import {
   fixedSourceFingerprint,
   taskBrief,
   taskDetailedOneShot,
-  taskMindMapOneShot,
   taskNotes,
   taskPractice,
 } from './cacheableChapter.ts'
 import {
-  buildMindMapFromPdf,
-  buildOutlineMindMap,
+  buildTwoStageMindMap,
   cleanExcerpt,
   enrichMindMapCoverage,
-  extractPdfTocCandidates,
-  mindMapFallback,
-  parseMindMap,
-  pickBetterMindMap,
   splitPageText,
-  type MindMap,
   type PageSource,
 } from './mindMapGen.ts'
 import {
-  scoreMindMap,
   scoreNotesMarkdown,
   scorePracticeBundle,
   scrubMindMapLabels,
@@ -335,57 +327,46 @@ export async function runChapterBundle(
           })
           .eq('id', chapterId)
       } else {
-        const pdfMap = buildMindMapFromPdf(
-          title,
-          rawText,
-          currentPageSources,
-        )
-        const pdfCands = extractPdfTocCandidates(rawText)
-        const notesOutline = buildOutlineMindMap(
-          title,
-          explanationDetailed || explanation,
-          currentPageSources,
-        )
         const atlasPages = currentPageSources.map((s) => s.page)
-        const pdfStrong =
-          !!pdfMap &&
-          pdfMap.branches.length >= 5 &&
-          pdfMap.branches.filter((b) => (b.children?.length ?? 0) >= 2)
-            .length >= 3 &&
-          pdfCands.length >= 10
-
-        let mindMap: MindMap | null = pdfMap
-        if (!pdfStrong) {
-          const one = await askCacheableJson({
-            fixedSource,
-            task: taskMindMapOneShot(),
-          })
-          recordUsage(bag, one.usage, one.provider)
-          const fromOne = parseMindMap(one.value.mind_map ?? one.value, title)
-          mindMap =
-            pickBetterMindMap(pdfMap, fromOne) ||
-            fromOne ||
-            pdfMap ||
-            notesOutline
-        }
-        if (!mindMap) mindMap = mindMapFallback(title, currentConcepts)
-        mindMap = scrubMindMapLabels(mindMap)
+        const { map: built, meta: mmMeta } = await buildTwoStageMindMap({
+          title,
+          pageText: rawText,
+          pageSources: currentPageSources,
+          notesMarkdown: explanationDetailed || explanation,
+          concepts: currentConcepts,
+          askJson: async (task) => {
+            const one = await askCacheableJson({ fixedSource, task })
+            recordUsage(bag, one.usage, one.provider)
+            return one.value
+          },
+        })
+        let mindMap = scrubMindMapLabels(built)
         mindMap = enrichMindMapCoverage(
           mindMap,
           currentPageSources,
           atlasPages,
         )
-        let quality = scoreMindMap(mindMap, atlasPages)
-        if (!quality.ok && pdfMap) {
-          const pdfQ = scoreMindMap(pdfMap, atlasPages)
-          if (pdfQ.score >= quality.score) {
-            mindMap = scrubMindMapLabels(
-              enrichMindMapCoverage(pdfMap, currentPageSources, atlasPages),
-            )
-            quality = scoreMindMap(mindMap, atlasPages)
-          }
-        }
         await admin.from('chapters').update({ mind_map: mindMap }).eq('id', chapterId)
+        await logAiUsage(admin, {
+          operation: opFor(kind),
+          bookId: bookCtx.bookId,
+          chapterId,
+          userId: bookCtx.userId,
+          bag,
+          meta: { ...usageMetaBase, kind, force, ...mmMeta },
+        })
+        artifacts.push({
+          kind,
+          ok: true,
+          usage: {
+            prompt_tokens: bag.usage.prompt_tokens,
+            completion_tokens: bag.usage.completion_tokens,
+            total_tokens: bag.usage.total_tokens,
+            cached_tokens: bag.usage.cached_tokens,
+            estimated: bag.usage.estimated,
+          },
+        })
+        continue
       }
 
       await logAiUsage(admin, {

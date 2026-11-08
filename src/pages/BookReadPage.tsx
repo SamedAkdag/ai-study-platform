@@ -9,9 +9,9 @@ import {
 } from '@/types/pdfSelection'
 import PdfViewer from '@/components/PdfViewer'
 import StudyPdfReader from '@/components/StudyPdfReader'
-import PdfAiPanel from '@/components/PdfAiPanel'
 import CiteDraftPanel from '@/components/CiteDraftPanel'
 import StudySplitPane from '@/components/StudySplitPane'
+import PdfStudyAssistRail from '@/components/PdfStudyAssistRail'
 import { citationStyleLabel } from '@/lib/citations'
 import { useBookPdfUrl } from '@/hooks/useBookPdfUrl'
 import { useStudySession } from '@/hooks/useStudySession'
@@ -24,6 +24,12 @@ import {
   subscribeImportJob,
   type ImportJobStatus,
 } from '@/lib/bookImport'
+import {
+  getOcrJobStatus,
+  restartBackgroundOcr,
+  subscribeOcrJob,
+  type OcrJobStatus,
+} from '@/lib/ocrJobs'
 import { pageNeedsOcr } from '@/lib/pageTextQuality'
 import type { PageText } from '@/lib/slidingWindow'
 import {
@@ -41,10 +47,14 @@ import {
 } from '@/lib/exportNotesPdf'
 import { downloadPdfWithInserts } from '@/lib/exportPdfWithInserts'
 import PdfOrganizePanel from '@/components/PdfOrganizePanel'
+import UnitScopeDialog from '@/components/UnitScopeDialog'
+import { stashUnitScope, type UnitScope } from '@/lib/unitScope'
 import { rememberPdf } from '@/lib/pdfSession'
 import { fetchPdfBytes, pdfBytesToBlob } from '@/lib/pdfManipulate'
 import { geoFromPayload } from '@/lib/pdfAnnotationGeo'
 import type { PdfRegion } from '@/lib/pdfRegion'
+import type { PageSource } from '@/lib/sourceLookup'
+import { speakPdfText, stopPdfSpeak } from '@/lib/pdfSpeak'
 
 type ViewMode = 'study' | 'original'
 
@@ -53,6 +63,8 @@ type FocusTarget = {
   region?: PdfRegion
   annotationId?: string
 }
+
+type AiMode = 'ask' | 'summarize' | 'explain' | 'translate'
 
 /** PDF → sayfa sayfa metin/markdown; tarama ise sayfa sayfa OCR. */
 export default function BookReadPage() {
@@ -87,7 +99,9 @@ export default function BookReadPage() {
   }, [bookId])
   const [pages, setPages] = useState<PageText[]>([])
   const [sel, setSel] = useState<PdfSelectionPayload | null>(null)
-  const [mode, setMode] = useState<'ask' | 'summarize' | 'explain' | null>(null)
+  const [mode, setMode] = useState<AiMode | null>(null)
+  const [seedQuestion, setSeedQuestion] = useState<string | null>(null)
+  const [pageSpeaking, setPageSpeaking] = useState(false)
   const [notes, setNotes] = useState<PdfAnnotation[]>(() =>
     bookId ? loadPdfAnnotations(bookId) : [],
   )
@@ -100,13 +114,18 @@ export default function BookReadPage() {
   const [noteBody, setNoteBody] = useState('')
   const [toast, setToast] = useState<string | null>(null)
   const [importStatus, setImportStatus] = useState<ImportJobStatus | null>(null)
+  const [ocrStatus, setOcrStatus] = useState<OcrJobStatus | null>(null)
   const [organizeOpen, setOrganizeOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
+  const [scopeOpen, setScopeOpen] = useState(false)
   const [focusTarget, setFocusTarget] = useState<FocusTarget | null>(null)
   const [pdfRefresh, setPdfRefresh] = useState(0)
   const [workingBytes, setWorkingBytes] = useState<Uint8Array | null>(null)
   const [workingUrl, setWorkingUrl] = useState<string | null>(null)
+  const [lastAiInsertId, setLastAiInsertId] = useState<string | null>(null)
   const workingSeedGen = useRef(0)
+  const selRef = useRef<PdfSelectionPayload | null>(null)
+  selRef.current = sel
 
   function jumpToAnnotation(n: {
     id: string
@@ -137,6 +156,12 @@ export default function BookReadPage() {
   }, [toolsOpen])
 
   useEffect(() => {
+    return () => {
+      stopPdfSpeak()
+    }
+  }, [])
+
+  useEffect(() => {
     const fromUrl = Number(searchParams.get('page') || '0')
     setReaderPage(Number.isFinite(fromUrl) && fromUrl >= 1 ? fromUrl : 1)
     setViewMode('original')
@@ -150,7 +175,12 @@ export default function BookReadPage() {
     }
     setNotes(loadPdfAnnotations(bookId))
     void import('@/lib/pdfAnnotationsSync').then((m) =>
-      m.pullPdfAnnotations(bookId).then(setNotes),
+      m.pullPdfAnnotationsWithMeta(bookId).then((result) => {
+        setNotes(result.annotations)
+        if (result.syncFailed) {
+          flash('Notlar buluta senkronlanamadı — yerelde duruyor')
+        }
+      }),
     )
     // Intentionally not depending on searchParams — URL page changes handled below
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -281,6 +311,18 @@ export default function BookReadPage() {
     })
   }, [bookId, queryClient])
 
+  useEffect(() => {
+    if (!bookId) {
+      setOcrStatus(null)
+      return
+    }
+    setOcrStatus(getOcrJobStatus(bookId))
+    return subscribeOcrJob((status) => {
+      if (status.bookId !== bookId) return
+      setOcrStatus(status)
+    })
+  }, [bookId])
+
   const omittedQuotes = useMemo(
     () =>
       notes
@@ -306,15 +348,18 @@ export default function BookReadPage() {
   )
 
   const unitsMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (scope: UnitScope) => {
       if (!bookId || !bookQuery.data) throw new Error('Kitap yok')
+      stashUnitScope(bookId, scope)
       await processBookPipeline({
         bookId,
         bookTitle: bookQuery.data.title,
         pages: pages.length ? pages : undefined,
+        scope,
       })
     },
     onSuccess: async () => {
+      setScopeOpen(false)
       await queryClient.invalidateQueries({ queryKey: ['book', bookId] })
       await queryClient.invalidateQueries({ queryKey: ['chapters', bookId] })
       setToast('Üniteler hazır')
@@ -322,6 +367,17 @@ export default function BookReadPage() {
     },
     onError: (err) => setToast(friendlyAiError(err)),
   })
+
+  function startUnits(scope: UnitScope) {
+    navigate(`/processing/${bookId}`)
+    unitsMutation.mutate(scope)
+  }
+
+  const maxPageHint = Math.max(
+    bookQuery.data?.total_pages || 0,
+    pages.reduce((m, p) => Math.max(m, p.pageNumber), 0),
+    1,
+  )
 
   function refreshNotes() {
     if (bookId) setNotes(loadPdfAnnotations(bookId))
@@ -332,19 +388,74 @@ export default function BookReadPage() {
     window.setTimeout(() => setToast(null), 2200)
   }
 
+  function openAiPanel(
+    payload: PdfSelectionPayload,
+    next: AiMode | 'mindmap',
+  ) {
+    setDraftCite(null)
+    setDraftNote(null)
+    setSel(payload)
+    if (next === 'mindmap') {
+      setMode('ask')
+      setSeedQuestion(
+        'Bu pasaj için 5–8 kısa zihin haritası dalı öner (isim + 1 satır).',
+      )
+    } else {
+      setMode(next)
+      setSeedQuestion(null)
+    }
+    setMobilePane('notes')
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey
+      if (!meta) return
+      const payload = selRef.current
+      if (!payload?.selectedText.trim()) return
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        openAiPanel(payload, 'summarize')
+      } else if (e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        openAiPanel(payload, 'ask')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   function handleAction(
     payload: PdfSelectionPayload,
     action: PdfSelectionAction,
   ) {
     if (!bookId) return
 
-    // AI / note → sağ panel (sayfa dilimleme yok)
-    if (action === 'ask' || action === 'summarize' || action === 'explain') {
-      setDraftCite(null)
-      setDraftNote(null)
-      setSel(payload)
-      setMode(action)
-      setMobilePane('notes')
+    // PDF kahraman / AI gölge — cevap sağ panelde (modal yok)
+    if (
+      action === 'ask' ||
+      action === 'summarize' ||
+      action === 'explain' ||
+      action === 'translate'
+    ) {
+      openAiPanel(payload, action)
+      return
+    }
+
+    if (action === 'listen') {
+      if (!payload.selectedText.trim()) {
+        flash('Okunacak metin yok')
+        return
+      }
+      speakPdfText(payload.selectedText, {
+        onSpeaking: setPageSpeaking,
+        onError: () => flash('Sesli okuma başarısız'),
+      })
+      return
+    }
+
+    if (action === 'mindmap') {
+      openAiPanel(payload, 'mindmap')
       return
     }
 
@@ -480,7 +591,7 @@ export default function BookReadPage() {
 
   function saveAiToPdf(input: {
     payload: PdfSelectionPayload
-    mode: 'ask' | 'summarize' | 'explain'
+    mode: AiMode
     body: string
     question?: string
   }) {
@@ -489,11 +600,13 @@ export default function BookReadPage() {
     if (!body) throw new Error('Eklenecek AI metni yok')
 
     const geo = geoFromPayload(input.payload)
+    const aiMode =
+      input.mode === 'translate' ? 'ask' : input.mode
 
-    addPdfAnnotation(bookId, {
+    const item = addPdfAnnotation(bookId, {
       page: input.payload.page,
       kind: 'ai',
-      aiMode: input.mode,
+      aiMode,
       quote: input.payload.selectedText,
       question: input.question,
       body,
@@ -503,16 +616,32 @@ export default function BookReadPage() {
       anchorLeftPct: geo.anchorLeftPct ?? 0.06,
     })
     setNotes(loadPdfAnnotations(bookId))
-    flash('AI seçimin altına eklendi')
-    setMobilePane('pdf')
+    setLastAiInsertId(item.id)
+    flash('Sayfana eklendi')
     setViewMode('original')
     setReaderPage(input.payload.page)
-    setSel(null)
-    setMode(null)
+    setFocusTarget({
+      page: input.payload.page,
+      region: input.payload.region,
+      annotationId: item.id,
+    })
+    return item
   }
 
   const insertChapterId =
     firstReady?.id || chapters[0]?.id || bookId || ''
+
+  const pageSources = useMemo<PageSource[]>(
+    () =>
+      pages
+        .filter((p) => (p.text || '').trim().length > 0)
+        .map((p) => ({
+          page: p.pageNumber,
+          topics: [] as string[],
+          excerpt: p.text.slice(0, 1200),
+        })),
+    [pages],
+  )
 
   const leftPane =
     viewMode === 'study' && hasReadable ? (
@@ -553,6 +682,7 @@ export default function BookReadPage() {
         onAction={handleAction}
         focusTarget={focusTarget}
         onFocusHandled={() => setFocusTarget(null)}
+        flowScroll
       />
     ) : (
       <p className="muted p-4 text-sm">
@@ -580,51 +710,39 @@ export default function BookReadPage() {
         </span>
       }
     >
-      <header className="study-workspace-bar study-workspace-bar--focus">
-        <div className="study-workspace-bar__lead">
-          <p className="study-crumb">
-            <Link to="/">Kitaplık</Link>
-            <span className="study-crumb__sep" aria-hidden>
-              ›
-            </span>
-            <span>{bookTitle}</span>
-          </p>
-          <h1 className="study-workspace-bar__title">{bookTitle}</h1>
-        </div>
-        <div className="study-workspace-bar__controls">
+      <header className="reader-chrome-top">
+        <Link to="/library" className="reader-chrome-top__back">
+          ← Kitaplığım
+        </Link>
+        <p className="reader-chrome-top__file" title={bookTitle}>
+          <span>{bookTitle}</span>
+        </p>
+        <div className="reader-chrome-top__actions">
+          <Link to={`/study/${bookId}`} className="btn-ghost text-xs">
+            Masa
+          </Link>
           {firstReady ? (
             <Link
               to={`/books/${bookId}/chapters/${firstReady.id}`}
-              className="btn-primary text-sm"
+              className="btn-ghost text-xs"
             >
-              Çalış →
+              Çalış
             </Link>
-          ) : hasUnits ? (
-            <Link to={`/books/${bookId}`} className="btn-primary text-sm">
-              Üniteler
-            </Link>
-          ) : (
+          ) : !hasUnits ? (
             <button
               type="button"
-              className="btn-primary text-sm"
+              className="btn-ghost text-xs"
               disabled={
                 unitsMutation.isPending ||
                 isProcessing ||
-                !pages.length ||
+                (!pages.length && !bookQuery.data?.total_pages) ||
                 loadingMore
               }
-              onClick={() => {
-                navigate(`/processing/${bookId}`)
-                unitsMutation.mutate()
-              }}
+              onClick={() => setScopeOpen(true)}
             >
-              {unitsMutation.isPending || isProcessing
-                ? 'Hazırlanıyor…'
-                : loadingMore
-                  ? 'Sayfalar…'
-                  : 'Üniteleri oluştur'}
+              Ünite
             </button>
-          )}
+          ) : null}
 
           <div className="relative" data-book-tools>
             <button
@@ -651,6 +769,19 @@ export default function BookReadPage() {
                   {viewMode === 'original' ? 'Metin görünümü' : 'PDF görünümü'}
                   <span className="muted">Kaynak biçimi</span>
                 </button>
+                {hasUnits ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false)
+                      setScopeOpen(true)
+                    }}
+                  >
+                    Sayfa ekle
+                    <span className="muted">Ünite kapsamı</span>
+                  </button>
+                ) : null}
                 {pdf.url ? (
                   <button
                     type="button"
@@ -808,23 +939,123 @@ export default function BookReadPage() {
         </div>
       ) : null}
 
-      {importStatus?.phase === 'error' && (
-        <div className="alert-error mb-3 text-sm">{importStatus.message}</div>
-      )}
+      {importStatus?.phase === 'error' ? (
+        <div className="alert-error mb-3 flex flex-wrap items-center gap-2 text-sm">
+          <span>
+            {importStatus.message ||
+              'Metin çıkarma / OCR başarısız. PDF okunabilir; ünite üretimi için tekrar dene.'}
+          </span>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            onClick={() => {
+              if (!bookId) return
+              startBackgroundTextExtract({
+                bookId,
+                titleHint: bookQuery.data?.title,
+              })
+            }}
+          >
+            Tekrar dene
+          </button>
+        </div>
+      ) : null}
+
+      {ocrStatus?.phase === 'error' && importStatus?.phase !== 'error' ? (
+        <div className="alert-error mb-3 flex flex-wrap items-center gap-2 text-sm">
+          <span>{ocrStatus.message || 'OCR başarısız'}</span>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={!pages.length}
+            onClick={() => {
+              if (!bookId || !pages.length) return
+              restartBackgroundOcr({ bookId, pages })
+            }}
+          >
+            OCR’ı tekrar dene
+          </button>
+        </div>
+      ) : null}
+
+      {ocrStatus?.phase === 'running' && !loadingMore ? (
+        <div className="alert-info mb-3 text-sm">
+          <p className="font-semibold">OCR arka planda</p>
+          <p className="mt-1 opacity-90">{ocrStatus.message}</p>
+          {ocrStatus.total > 0 ? (
+            <div className="progress-track mt-2 max-w-md">
+              <div
+                className="progress-fill"
+                style={{
+                  width: `${Math.round(
+                    (100 * ocrStatus.done) / Math.max(1, ocrStatus.total),
+                  )}%`,
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {!pdf.url && !pdf.loading && viewMode === 'original' && (
-        <div className="alert-error mb-4">
-          {pdf.error ||
-            'Bu cihazda orijinal PDF bulunamadı. Aynı tarayıcıda yeniden yükle.'}
+        <div className="alert-error mb-4 flex flex-wrap items-center gap-2">
+          <span>
+            {pdf.error ||
+              'Bu cihazda orijinal PDF bulunamadı. Aynı tarayıcıda yeniden yükle.'}
+          </span>
+          <Link to="/" className="btn-ghost text-xs">
+            Kitaplığa dön
+          </Link>
         </div>
       )}
 
+      <div className="pdf-reading-stage">
       <StudySplitPane
         mobilePane={mobilePane}
         onMobilePaneChange={setMobilePane}
+        collapseNotes={false}
+        stickyAssist
+        rightLabel="Asistan"
         left={leftPane}
         right={
-          <div className="study-split__notes-inner space-y-4 p-3 sm:p-4">
+          <PdfStudyAssistRail
+            bookTitle={bookTitle}
+            noteCount={notes.length}
+            chapterId={insertChapterId || 'book'}
+            chapterTitle={bookQuery.data?.title || 'PDF'}
+            payload={sel}
+            mode={mode}
+            seedQuestion={seedQuestion}
+            pageSources={pageSources}
+            hideIdle={!!draftNote || !!draftCite || organizeOpen}
+            onJumpPage={(page) => {
+              setViewMode('original')
+              setMobilePane('pdf')
+              setReaderPage(page)
+            }}
+            onCloseAssist={() => {
+              setSel(null)
+              setMode(null)
+              setSeedQuestion(null)
+              setDraftNote(null)
+              setDraftCite(null)
+              setOrganizeOpen(false)
+              setMobilePane('pdf')
+              stopPdfSpeak()
+            }}
+            onSaveToBook={(body, question) => {
+              if (!sel || !mode) {
+                flash('Önce PDF’den metin seç')
+                throw new Error('Seçim yok')
+              }
+              saveAiToPdf({
+                payload: sel,
+                mode,
+                body,
+                question,
+              })
+            }}
+          >
             {organizeOpen && (workingBytes || pdf.url) && bookId ? (
               <PdfOrganizePanel
                 // Stable URL for effect deps — blob workingUrl churn caused reload loops
@@ -844,7 +1075,9 @@ export default function BookReadPage() {
                   setViewMode('original')
                   setMobilePane('pdf')
                   flash('PDF güncellendi')
-                  void queryClient.invalidateQueries({ queryKey: ['book', bookId] })
+                  void queryClient.invalidateQueries({
+                    queryKey: ['book', bookId],
+                  })
                 }}
               />
             ) : null}
@@ -905,52 +1138,70 @@ export default function BookReadPage() {
               />
             )}
 
-            <PdfAiPanel
-              chapterId={insertChapterId || 'book'}
-              chapterTitle={bookQuery.data?.title || 'PDF'}
-              payload={sel}
-              mode={mode}
-              onClose={() => {
-                setSel(null)
-                setMode(null)
-              }}
-              onSaveToBook={(body, question) => {
-                if (!sel || !mode) {
-                  flash('Önce PDF’den metin seç')
-                  throw new Error('Seçim yok')
-                }
-                saveAiToPdf({
-                  payload: sel,
-                  mode,
-                  body,
-                  question,
-                })
-              }}
-            />
-
-            <section className="space-y-2">
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="section-label mb-0">Notların & alıntılar</p>
-                <span className="muted text-[11px]">{notes.length}</span>
-              </div>
-              {notes.length === 0 && !draftNote && !draftCite && !sel && (
-                <div className="surface-panel p-5">
-                  <p className="font-display text-base font-semibold">
-                    Metni seç, notunu bırak
-                  </p>
-                  <p className="muted mt-2 text-sm leading-relaxed">
-                    PDF’de sürükle → Vurgu, AI veya Not. Hepsi sağda toplanır.
-                  </p>
+            {notes.length > 0 ? (
+              <section className="space-y-2 mt-4">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="section-label mb-0">Notların</p>
+                  <span className="muted text-[11px]">{notes.length}</span>
                 </div>
-              )}
-              <ul className="space-y-2">
-                {notes.map((n) => (
-                  <li key={n.id} className="pdf-note-card pdf-note-card--jump">
-                    <div className="flex items-start justify-between gap-2">
+                <ul className="space-y-2">
+                  {notes.map((n) => (
+                    <li
+                      key={n.id}
+                      className="pdf-note-card pdf-note-card--jump"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <button
+                          type="button"
+                          className="pdf-note-card__jump"
+                          title="Sayfaya git"
+                          onClick={() =>
+                            jumpToAnnotation({
+                              id: n.id,
+                              page: n.page,
+                              region: n.region,
+                            })
+                          }
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent-deep)]">
+                            {annotationKindLabel(n.kind)}
+                            {n.kind === 'cite' && n.citeStyle
+                              ? ` · ${String(n.citeStyle).toUpperCase()}`
+                              : ''}{' '}
+                            · s. {n.page}
+                            <span className="pdf-note-card__goto"> → Git</span>
+                          </p>
+                        </button>
+                        <div className="flex shrink-0 gap-1">
+                          {n.kind === 'cite' && n.body && (
+                            <button
+                              type="button"
+                              className="btn-ghost text-[11px]"
+                              onClick={() => {
+                                void navigator.clipboard
+                                  ?.writeText(n.body || '')
+                                  .then(() => flash('Cite panoya kopyalandı'))
+                                  .catch(() => undefined)
+                              }}
+                            >
+                              Kopyala
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="btn-ghost text-[11px]"
+                            onClick={() => {
+                              if (!bookId) return
+                              setNotes(removePdfAnnotation(bookId, n.id))
+                            }}
+                          >
+                            Sil
+                          </button>
+                        </div>
+                      </div>
                       <button
                         type="button"
-                        className="pdf-note-card__jump"
-                        title="Sayfaya git"
+                        className="pdf-note-card__jump mt-1 w-full text-left"
                         onClick={() =>
                           jumpToAnnotation({
                             id: n.id,
@@ -959,86 +1210,84 @@ export default function BookReadPage() {
                           })
                         }
                       >
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent-deep)]">
-                          {annotationKindLabel(n.kind)}
-                          {n.kind === 'cite' && n.citeStyle
-                            ? ` · ${String(n.citeStyle).toUpperCase()}`
-                            : ''}{' '}
-                          · s. {n.page}
-                          <span className="pdf-note-card__goto"> → Git</span>
+                        <p className="text-xs leading-relaxed text-[var(--ink-soft)]">
+                          “{n.quote.slice(0, 160)}
+                          {n.quote.length > 160 ? '…' : ''}”
                         </p>
                       </button>
-                      <div className="flex shrink-0 gap-1">
-                        {n.kind === 'cite' && n.body && (
-                          <button
-                            type="button"
-                            className="btn-ghost text-[11px]"
-                            onClick={() => {
-                              void navigator.clipboard
-                                ?.writeText(n.body || '')
-                                .then(() => flash('Cite panoya kopyalandı'))
-                                .catch(() => undefined)
-                            }}
-                          >
-                            Kopyala
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="btn-ghost text-[11px]"
-                          onClick={() => {
+                      {n.kind === 'note' && (
+                        <textarea
+                          className="field mt-2 text-sm"
+                          rows={2}
+                          placeholder="Notunu düzenle…"
+                          value={n.body || ''}
+                          onChange={(e) => {
                             if (!bookId) return
-                            setNotes(removePdfAnnotation(bookId, n.id))
+                            setNotes(
+                              updatePdfAnnotation(bookId, n.id, {
+                                body: e.target.value,
+                              }),
+                            )
                           }}
-                        >
-                          Sil
-                        </button>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="pdf-note-card__jump mt-1 w-full text-left"
-                      onClick={() =>
-                        jumpToAnnotation({
-                          id: n.id,
-                          page: n.page,
-                          region: n.region,
-                        })
-                      }
-                    >
-                      <p className="text-xs leading-relaxed text-[var(--ink-soft)]">
-                        “{n.quote.slice(0, 160)}
-                        {n.quote.length > 160 ? '…' : ''}”
-                      </p>
-                    </button>
-                    {n.kind === 'note' && (
-                      <textarea
-                        className="field mt-2 text-sm"
-                        rows={2}
-                        placeholder="Notunu düzenle…"
-                        value={n.body || ''}
-                        onChange={(e) => {
-                          if (!bookId) return
-                          setNotes(
-                            updatePdfAnnotation(bookId, n.id, {
-                              body: e.target.value,
-                            }),
-                          )
-                        }}
-                      />
-                    )}
-                    {n.kind === 'cite' && n.body && (
-                      <pre className="cite-preview mt-2">{n.body}</pre>
-                    )}
-                    {n.body && n.kind !== 'note' && n.kind !== 'cite' && (
-                      <p className="mt-1.5 text-sm leading-relaxed">{n.body}</p>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          </div>
+                        />
+                      )}
+                      {n.kind === 'cite' && n.body && (
+                        <pre className="cite-preview mt-2">{n.body}</pre>
+                      )}
+                      {n.body && n.kind !== 'note' && n.kind !== 'cite' && (
+                        <p className="mt-1.5 text-sm leading-relaxed">
+                          {n.body}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </PdfStudyAssistRail>
         }
+      />
+        <footer className="reader-chrome-bottom">
+          <p className="reader-chrome-bottom__notes">
+            {notes.length} not
+          </p>
+          <div className="reader-chrome-bottom__actions">
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => {
+                if (pageSpeaking) {
+                  stopPdfSpeak()
+                  setPageSpeaking(false)
+                  return
+                }
+                const pageText =
+                  pages.find((p) => p.pageNumber === readerPage)?.text || ''
+                if (!pageText.trim()) {
+                  flash(
+                    'Bu sayfada metin yok — OCR bitsin veya bir paragraf seç',
+                  )
+                  return
+                }
+                speakPdfText(pageText, {
+                  onSpeaking: setPageSpeaking,
+                  onError: () => flash('Sesli okuma başarısız'),
+                })
+              }}
+            >
+              {pageSpeaking ? 'Durdur' : 'Sayfayı dinle'}
+            </button>
+          </div>
+        </footer>
+      </div>
+
+      <UnitScopeDialog
+        open={scopeOpen}
+        maxPage={maxPageHint}
+        hasUnits={hasUnits}
+        busy={unitsMutation.isPending || isProcessing}
+        onClose={() => setScopeOpen(false)}
+        onConfirm={startUnits}
       />
     </AppShell>
   )

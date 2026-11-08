@@ -5,6 +5,7 @@ import './index.css'
 import App from './App'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import { initMoodTheme } from '@/lib/moodTheme'
+import { scheduleEmaBackgroundWarm } from '@/lib/emaWarmSchedule'
 
 initMoodTheme()
 
@@ -15,3 +16,6 @@ createRoot(document.getElementById('root')!).render(
     </ErrorBoundary>
   </StrictMode>,
 )
+
+// TTS model: idle prefetch after first paint — does not block open.
+scheduleEmaBackgroundWarm()

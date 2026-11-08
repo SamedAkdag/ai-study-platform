@@ -20,3 +20,9 @@ verify_jwt = true
 
 [functions.segment-study-units]
 verify_jwt = true
+
+[functions.generate-lesson-script]
+verify_jwt = true
+
+[functions.generate-audio-overview]
+verify_jwt = true

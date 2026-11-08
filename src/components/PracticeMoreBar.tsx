@@ -6,6 +6,7 @@ import {
 } from '@/lib/api'
 import type { ExampleItem, QuizItem } from '@/types/database'
 import { friendlyAiError } from '@/lib/errors'
+import LessonWaitMood from '@/components/LessonWaitMood'
 
 const LEVELS: Array<{ id: PracticeDifficulty; label: string }> = [
   { id: 'easy', label: 'Kolay' },
@@ -138,10 +139,26 @@ export default function PracticeMoreBar({
           alta eklenir.
         </p>
       </div>
+      {mutation.isPending ? (
+        <LessonWaitMood
+          kind="practice"
+          size="compact"
+          title={pendingLabel}
+          detail="Yeniler alta eklenecek"
+        />
+      ) : null}
       {mutation.isError ? (
-        <p className="practice-more__error text-xs" role="alert">
-          {friendlyAiError(mutation.error)}
-        </p>
+        <div className="practice-more__error text-xs" role="alert">
+          <span>{friendlyAiError(mutation.error)}</span>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={mutation.isPending}
+            onClick={() => mutation.mutate()}
+          >
+            Tekrar dene
+          </button>
+        </div>
       ) : null}
     </div>
   )

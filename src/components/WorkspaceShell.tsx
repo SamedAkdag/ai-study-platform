@@ -8,27 +8,34 @@ import StudyTimerBadge from '@/components/StudyTimerBadge'
 import ThemePicker from '@/components/ThemePicker'
 import { useAuth } from '@/lib/auth'
 import { fetchMyLibrary } from '@/lib/library'
-import { pullAllSrsForUser } from '@/lib/srs'
-import {
-  countAllNotes,
-  countDueSrs,
-  formatWorkspaceDate,
-} from '@/lib/workspaceHome'
+import { formatWorkspaceDate } from '@/lib/workspaceHome'
 
 type Props = {
   children: ReactNode
-  /** Breadcrumb label after “Çalışma alanın” */
   crumb?: string
   autoTour?: boolean
 }
 
 const NAV = [
-  { to: '/', label: 'Kitaplık', end: true, icon: 'library' as const },
-  { to: '/notes', label: 'Notlar', end: false, icon: 'notes' as const },
-  { to: '/review', label: 'Tekrar', end: false, icon: 'review' as const },
+  { to: '/', label: 'Yükle', end: true, icon: 'upload' as const },
+  { to: '/library', label: 'Kitaplığım', end: false, icon: 'library' as const },
+  { to: '/tools', label: 'Araçlar', end: false, icon: 'tools' as const },
 ]
 
 function NavIcon({ name }: { name: (typeof NAV)[number]['icon'] }) {
+  if (name === 'upload') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+        <path
+          d="M8 10.5V3M8 3 5.5 5.5M8 3l2.5 2.5M3 12.5h10"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    )
+  }
   if (name === 'library') {
     return (
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
@@ -38,20 +45,6 @@ function NavIcon({ name }: { name: (typeof NAV)[number]['icon'] }) {
           strokeWidth="1.3"
           strokeLinejoin="round"
         />
-      </svg>
-    )
-  }
-  if (name === 'notes') {
-    return (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-        <path
-          d="M4 2.5h6.5L13 5v8.5H4V2.5Z"
-          stroke="currentColor"
-          strokeWidth="1.3"
-          strokeLinejoin="round"
-        />
-        <path d="M10.5 2.5V5H13" stroke="currentColor" strokeWidth="1.3" />
-        <path d="M6 8h4M6 10.5h3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
       </svg>
     )
   }
@@ -67,7 +60,7 @@ function NavIcon({ name }: { name: (typeof NAV)[number]['icon'] }) {
 
 export default function WorkspaceShell({
   children,
-  crumb = 'Kitaplığım',
+  crumb = 'Yükle',
   autoTour = false,
 }: Props) {
   const { user, profile } = useAuth()
@@ -75,7 +68,6 @@ export default function WorkspaceShell({
   const [menuOpen, setMenuOpen] = useState(false)
   const [manualTour, setManualTour] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
-  const [srsTick, setSrsTick] = useState(0)
   const menuRef = useRef<HTMLDivElement>(null)
   const date = useMemo(() => formatWorkspaceDate(), [])
 
@@ -83,23 +75,7 @@ export default function WorkspaceShell({
     queryKey: ['my-library', user?.id ?? 'anon'],
     queryFn: () => fetchMyLibrary(user?.id),
   })
-  const items = libQuery.data ?? []
-  const libraryCount = items.length
-  const notesCount = useMemo(() => countAllNotes(items), [items])
-  const dueCount = useMemo(
-    () => countDueSrs(),
-    [location.pathname, items, srsTick],
-  )
-
-  useEffect(() => {
-    let cancelled = false
-    void pullAllSrsForUser().then(() => {
-      if (!cancelled) setSrsTick((n) => n + 1)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [user?.id])
+  const libraryCount = (libQuery.data ?? []).length
 
   useEffect(() => {
     if (!menuOpen) return
@@ -122,16 +98,10 @@ export default function WorkspaceShell({
           <span className="workspace-brand__name">studium</span>
         </Link>
 
-        <p className="workspace-side__label">Çalışma alanın</p>
-        <nav className="workspace-nav" aria-label="Çalışma alanı">
+        <p className="workspace-side__label">Studium</p>
+        <nav className="workspace-nav" aria-label="Ana menü">
           {NAV.map((item) => {
-            const count =
-              item.to === '/'
-                ? libraryCount
-                : item.to === '/notes'
-                  ? notesCount
-                  : null
-            const showDot = item.to === '/review' && dueCount > 0
+            const count = item.to === '/library' ? libraryCount : null
             return (
               <NavLink
                 key={item.to}
@@ -148,23 +118,10 @@ export default function WorkspaceShell({
                 {count != null && count > 0 ? (
                   <span className="workspace-nav__count">{count}</span>
                 ) : null}
-                {showDot ? (
-                  <span className="workspace-nav__dot" title={`${dueCount} tekrar`} />
-                ) : null}
               </NavLink>
             )
           })}
         </nav>
-
-        <div className="workspace-side__foot">
-          <p className="workspace-side__label workspace-side__label--soft">Diğer</p>
-          <Link to="/stats" className="workspace-nav__link workspace-nav__link--quiet">
-            <span className="workspace-nav__text">Süreler</span>
-          </Link>
-          <Link to="/social" className="workspace-nav__link workspace-nav__link--quiet">
-            <span className="workspace-nav__text">Arkadaşlar</span>
-          </Link>
-        </div>
       </aside>
 
       {mobileNav ? (
@@ -190,7 +147,7 @@ export default function WorkspaceShell({
               <span />
             </button>
             <p className="workspace-crumb">
-              <Link to="/">Çalışma alanın</Link>
+              <Link to="/">Studium</Link>
               <span aria-hidden> › </span>
               <span>{crumb}</span>
             </p>
@@ -214,11 +171,11 @@ export default function WorkspaceShell({
                 {menuOpen ? (
                   <div className="surface-panel absolute right-0 z-50 mt-2 w-44 space-y-0.5 p-1.5">
                     <Link
-                      to="/"
+                      to="/library"
                       className="block rounded-lg px-2.5 py-2 text-xs"
                       onClick={() => setMenuOpen(false)}
                     >
-                      Kitaplık
+                      Kitaplığım
                     </Link>
                     <Link
                       to="/notes"
@@ -233,6 +190,20 @@ export default function WorkspaceShell({
                       onClick={() => setMenuOpen(false)}
                     >
                       Tekrar planı
+                    </Link>
+                    <Link
+                      to="/stats"
+                      className="block rounded-lg px-2.5 py-2 text-xs"
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      Süreler
+                    </Link>
+                    <Link
+                      to="/social"
+                      className="block rounded-lg px-2.5 py-2 text-xs"
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      Arkadaşlar
                     </Link>
                     <button
                       type="button"

@@ -14,6 +14,7 @@ import {
   type TtsStatus,
 } from '@/lib/tts'
 import type { FlashcardItem, QuizItem } from '@/types/database'
+import LessonWaitMood from '@/components/LessonWaitMood'
 
 type Props = {
   open: boolean
@@ -249,8 +250,19 @@ export default function FlashcardStories({
         </header>
 
         {!card ? (
-          <div className="flash-story__empty">
-            Bu ünitede flash kart için yeterli not yok.
+          <div className="flash-story__empty" role="status">
+            <p className="font-display text-lg font-semibold">Kart yok</p>
+            <p className="muted mt-2 text-sm leading-relaxed">
+              Bu ünite için flash içeriği çıkmadı. Anlatım veya alıştır paketini
+              üretip tekrar dene.
+            </p>
+            <button
+              type="button"
+              className="btn-primary mt-4"
+              onClick={onClose}
+            >
+              Kapat
+            </button>
           </div>
         ) : (
           <div
@@ -357,16 +369,24 @@ export default function FlashcardStories({
           </label>
           <div className="flash-story__tts">
             {ttsStatus === 'speaking' || ttsStatus === 'paused' ? (
-              <button
-                type="button"
-                className="btn-ghost text-xs"
-                onClick={() => {
-                  stopSpeech()
-                  setTtsStatus('idle')
-                }}
-              >
-                Durdur
-              </button>
+              <>
+                <LessonWaitMood
+                  kind="speaking"
+                  size="compact"
+                  className="flash-story__wait"
+                  title={ttsStatus === 'paused' ? 'Duraklatıldı' : 'Kart okunuyor'}
+                />
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => {
+                    stopSpeech()
+                    setTtsStatus('idle')
+                  }}
+                >
+                  Durdur
+                </button>
+              </>
             ) : (
               <button
                 type="button"

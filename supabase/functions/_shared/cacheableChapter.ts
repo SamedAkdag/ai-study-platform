@@ -28,7 +28,7 @@ import {
  * Bump when system/FIXED layout changes — notes + artifacts must be
  * redeployed together (Supabase bundles _shared per function).
  */
-export const CACHE_LAYOUT_VERSION = 'v5-mindmap-narration'
+export const CACHE_LAYOUT_VERSION = 'v6b-mindmap-noun-labels'
 
 /**
  * Stable system head including ALL output schemas.
@@ -45,8 +45,16 @@ BRIEF → {"markdown":"K1 markdown max~700"}
 DETAILED → {"markdown":"K3 markdown max~3200; 5–12 ##; tablo+Dikkat; atlas kapsamı"}
 PRACTICE → {"examples":[{"problem":"…","solution_steps":["1","2","3"]}],"quiz":[{"question":"…","options":["A","B","C","D"],"correct_index":0,"explanation":"…"}],"flashcards":[{"role":"hook|teach|concept|check|trap|summary","front":"…","back":"…"}]}
   (2 örnek, 4 quiz, 8–10 flash; zihin haritası YOK)
-MINDMAP → {"mind_map":{"central":"omurga","narration":"opsiyonel 40–90 kelime konuşma (yalnız bu düğüm; altlara atıf/şekil yok)","branches":[{"label":"Ana","page":12,"narration":"opsiyonel","children":["Alt1","Alt2"],"child_narrations":["opsiyonel"]}]}}
-  (6–14 ana; 2–6 kısa alt; başlıkta cümle yasak; narration opsiyonel—önce yapı; istemci boşları doldurur)`
+
+ZİHİN HARİTASI — iki aşama:
+MINDMAP_SKEL → {"mind_map":{"central":"omurga ≤5 kelime","branches":[{"label":"konu","page":12,"children":[]}]}}
+  Aşama1: 5–9 ana; children []. Öncelik PDF ADAY BAŞLIKLAR > SAYFA ATLASI.
+  label = TAM isim öbeği (≤6 kelime). İyi: "Limit Tanımı". Kötü: "Limit bir noktaya yaklaşırken".
+  YASAK: yarım cümle, tanım cümlesi, Birinci bölüm, Bölüm N, yalnız sayı, yarım kelime.
+MINDMAP_FILL → {"mind_map":{"central":"…","branches":[{"label":"aynı ana","page":12,"children":["alt1","alt2"]}]}}
+  Aşama2: iskelet label/page KORU; her ana 3–7 alt = kısa isim öbeği (tanım cümlesi değil).
+  narration ayrı alan — label’e yazma. Dayanaksız alt yok.
+MINDMAP → yedek tek geçiş; mümkünse SKEL+FILL. narration opsiyonel.`
 
 const SOURCE_PACK_CHARS = 8000
 
@@ -187,13 +195,14 @@ export function taskPractice(style?: string | null): string {
 }
 
 export function taskMindMapSkeleton(): string {
-  return `MINDMAP_SKEL | ana başlıklar children=[] | şema MINDMAP`
+  return `MINDMAP_SKEL | Aşama1 | 5–9 ana | children=[] | label=TAM isim öbeği ≤6 kelime | İyi:"Limit Tanımı" Kötü:"Limit bir noktaya" | yarım cümle/tanım cümlesi/Birinci bölüm YASAK | şema MINDMAP_SKEL`
 }
 
 export function taskMindMapFill(skeletonJson: string): string {
-  return `MINDMAP_FILL | children ekle | iskelet:${skeletonJson.slice(0, 800)}`
+  const skel = skeletonJson.replace(/\s+/g, ' ').trim().slice(0, 1400)
+  return `MINDMAP_FILL | Aşama2 | label/page KORU | altlar=kısa isim öbeği (tanım/yarım cümle YASAK) | iskelet:${skel}`
 }
 
 export function taskMindMapOneShot(): string {
-  return `MINDMAP | şema MINDMAP`
+  return `MINDMAP | yedek | label=TAM isim öbeği | yarım cümle/tanım cümlesi/sayı-only YASAK | 5–9×3–7 | şema MINDMAP`
 }

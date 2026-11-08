@@ -13,6 +13,8 @@ import {
   type PdfTextStyle,
 } from '@/lib/pdfTextStyle'
 import type { PdfSelectionPayload } from '@/types/pdfSelection'
+import LessonWaitMood from '@/components/LessonWaitMood'
+import { isTheaterLoadingBody } from '@/lib/pageTheater'
 
 const MODE_Q: Record<PdfAiMode, string> = {
   summarize:
@@ -103,19 +105,22 @@ export default function PdfInsertBlock({
       : annotationKindLabel(annotation.kind)
   const textStyle = annotation.textStyle
   const isReplace = annotation.kind === 'replace'
+  const writing = isTheaterLoadingBody(annotation.body)
 
   return (
     <section
-      className={`pdf-insert${matchClass(textStyle)}${
+      className={`pdf-insert pdf-insert--land${matchClass(textStyle)}${
         annotation.kind === 'ai' ? ' pdf-insert--ai' : ''
-      }${isReplace ? ' pdf-insert--replace' : ''}`}
+      }${isReplace ? ' pdf-insert--replace' : ''}${
+        writing ? ' pdf-insert--writing' : ''
+      }`}
       data-insert-id={annotation.id}
       style={pdfTextStyleToReact(textStyle)}
     >
       <header className="pdf-insert__head">
         <div>
           <p className="pdf-insert__label">
-            {label}
+            {writing ? 'Sayfa açılıyor' : label}
             {textStyle ? (
               <span className="pdf-insert__style-badge" title="Seçilen PDF yazı stiline uyumlu">
                 · PDF stili
@@ -134,7 +139,7 @@ export default function PdfInsertBlock({
             </p>
           )}
         </div>
-        {onRemove ? (
+        {onRemove && !writing ? (
           <button
             type="button"
             className="btn-ghost text-[11px]"
@@ -144,10 +149,14 @@ export default function PdfInsertBlock({
           </button>
         ) : null}
       </header>
-      {annotation.question ? (
+      {annotation.question && !writing ? (
         <p className="pdf-insert__question">Soru · {annotation.question}</p>
       ) : null}
-      {annotation.body ? (
+      {writing ? (
+        <div className="pdf-insert__writing">
+          <LessonWaitMood kind="thinking" size="compact" title="Mürekkep akıyor" />
+        </div>
+      ) : annotation.body ? (
         isReplace ? (
           <p className="pdf-insert__body pdf-insert__replace-text">{annotation.body}</p>
         ) : (

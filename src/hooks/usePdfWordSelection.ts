@@ -10,6 +10,7 @@ import {
   bandsClientRect,
   findWordIndexAt,
   lineRangeContaining,
+  paragraphRangeContaining,
   selectionFromIndices,
   sortWordsReadingOrder,
   type PdfWordSelResult,
@@ -27,7 +28,7 @@ type Opts = {
 /**
  * Professional PDF text selection on word geometry (not native DOM Selection).
  * - Drag: contiguous word range with live line-band highlights
- * - Double-click: word
+ * - Double-click: visual paragraph (then parent can open Ask)
  * - Triple-click: full line
  * - Shift+click: extend from anchor
  */
@@ -154,7 +155,7 @@ export function usePdfWordSelection(
         return
       }
 
-      // Triple-click → select whole line (edit stays on double-click via PdfViewer)
+      // Triple-click → select whole line
       if (count >= 3) {
         e.preventDefault()
         const line = lineRangeContaining(sortedRef.current, idx)
@@ -164,8 +165,11 @@ export function usePdfWordSelection(
         return
       }
 
-      // Second click of a double-click: don't capture — let onDoubleClick open editor
+      // Double-click → paragraph select (PdfViewer opens Ask in the shadow panel)
       if (count === 2) {
+        e.preventDefault()
+        const para = paragraphRangeContaining(sortedRef.current, idx)
+        setRange(para.start, para.end, idx)
         draggingRef.current = false
         pointerIdRef.current = null
         return

@@ -1,8 +1,16 @@
-import { useEffect } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchBook, fetchChapters } from '@/lib/api'
 import AppShell from '@/components/AppShell'
+import LessonWaitMood from '@/components/LessonWaitMood'
+import { friendlyAiError } from '@/lib/errors'
+import { processBookPipeline } from '@/lib/processBook'
+import {
+  describeUnitScope,
+  peekUnitScope,
+  stashUnitScope,
+} from '@/lib/unitScope'
 
 const STEPS = [
   { key: 'extracting', label: 'PDF metni hazır' },
@@ -14,7 +22,11 @@ const STEPS = [
 
 export default function ProcessingPage() {
   const { bookId } = useParams<{ bookId: string }>()
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [retryNote, setRetryNote] = useState<string | null>(null)
+  const nextStudy = searchParams.get('next') === 'study'
 
   const bookQuery = useQuery({
     queryKey: ['book', bookId],
@@ -33,21 +45,67 @@ export default function ProcessingPage() {
     refetchInterval: 2000,
   })
 
+  const retryMutation = useMutation({
+    mutationFn: async () => {
+      if (!bookId || !bookQuery.data) throw new Error('Kitap yok')
+      setRetryNote(null)
+      const scope = peekUnitScope(bookId) || { mode: 'all' as const }
+      stashUnitScope(bookId, scope)
+      await processBookPipeline({
+        bookId,
+        bookTitle: bookQuery.data.title,
+        scope,
+      })
+    },
+    onSuccess: async () => {
+      setRetryNote(null)
+      await queryClient.invalidateQueries({ queryKey: ['book', bookId] })
+      await queryClient.invalidateQueries({ queryKey: ['chapters', bookId] })
+    },
+    onError: (err) => setRetryNote(friendlyAiError(err)),
+  })
+
   useEffect(() => {
     if (!bookQuery.data || !bookId) return
     if (bookQuery.data.status !== 'ready') return
-    // PDF-first imports use progress_step=imported; don't bounce those here.
-    if (bookQuery.data.progress_step === 'imported') {
-      navigate(`/books/${bookId}/read`, { replace: true })
+    // After upload (?next=study) or unit split → study desk
+    if (nextStudy || bookQuery.data.progress_step === 'imported') {
+      navigate(`/study/${bookId}`, { replace: true })
       return
     }
-    navigate(`/books/${bookId}`, { replace: true })
+    navigate(`/study/${bookId}`, { replace: true })
   }, [
     bookQuery.data?.status,
     bookQuery.data?.progress_step,
     bookId,
     navigate,
+    nextStudy,
   ])
+
+  if (bookQuery.isError) {
+    return (
+      <AppShell>
+        <section className="mx-auto max-w-xl space-y-4">
+          <h1 className="font-display text-2xl font-semibold">
+            Kitap yüklenemedi
+          </h1>
+          <p className="muted text-sm">{friendlyAiError(bookQuery.error)}</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => void bookQuery.refetch()}
+            >
+              Tekrar dene
+            </button>
+            <Link to="/library" className="btn-ghost">
+              Kitaplığım
+            </Link>
+          </div>
+        </section>
+      </AppShell>
+    )
+  }
 
   const step = bookQuery.data?.progress_step || 'extracting'
   const stepIndex = Math.max(
@@ -57,6 +115,7 @@ export default function ProcessingPage() {
   const chapters = chaptersQuery.data ?? []
   const live = bookQuery.data?.error_message
   const failed = bookQuery.data?.status === 'failed'
+  const retrying = retryMutation.isPending
 
   return (
     <AppShell>
@@ -64,19 +123,31 @@ export default function ProcessingPage() {
         <header className="mb-8">
           <p className="muted text-sm">Hazırlanıyor</p>
           <h1 className="font-display mt-1 text-3xl font-semibold tracking-tight">
-            {bookQuery.data?.title || 'Kitabın işleniyor…'}
+            Kaynağın hazırlanıyor…
           </h1>
           <p className="muted mt-3 text-sm leading-relaxed">
-            Üniteler ayrılırken <strong>bu sekmeyi açık tut</strong>. Bitince
-            ünite listesine geçersin. PDF okumaya dönmek için kitaplıktan
-            açabilirsin.
+            {bookQuery.data?.title || 'Studium kaynağını hazırlıyor'}
           </p>
+          {bookId && peekUnitScope(bookId) ? (
+            <p className="muted mt-2 text-xs font-semibold">
+              Kapsam: {describeUnitScope(peekUnitScope(bookId)!)}
+            </p>
+          ) : null}
+          {!failed ? (
+            <div className="mt-4">
+              <LessonWaitMood
+                kind="processing"
+                size="banner"
+                detail={live || STEPS.find((s) => s.key === step)?.label || null}
+              />
+            </div>
+          ) : null}
         </header>
 
         <ol className="surface-panel space-y-2 p-4">
           {STEPS.filter((s) => s.key !== 'ready').map((s, i) => {
             const done = i < stepIndex || step === 'ready'
-            const active = s.key === step && !failed
+            const active = (s.key === step && !failed) || (retrying && i === 0)
             return (
               <li
                 key={s.key}
@@ -99,7 +170,9 @@ export default function ProcessingPage() {
                   {s.label}
                 </span>
                 {s.key === 'saving' && chapters.length > 0 && (
-                  <span className="text-xs opacity-80">{chapters.length} ünite</span>
+                  <span className="text-xs opacity-80">
+                    {chapters.length} ünite
+                  </span>
                 )}
               </li>
             )
@@ -116,16 +189,37 @@ export default function ProcessingPage() {
         )}
 
         {failed && (
-          <div className="alert-error mt-5 space-y-2">
+          <div className="alert-error mt-5 space-y-3">
             <p className="font-semibold">İşlem başarısız oldu</p>
-            {live && (
+            {live ? (
               <p className="text-xs break-words whitespace-pre-wrap opacity-95">
                 {live}
               </p>
-            )}
-            <Link to="/" className="inline-block font-semibold underline">
-              Yeniden dene
-            </Link>
+            ) : null}
+            {retryNote ? (
+              <p className="text-xs break-words whitespace-pre-wrap opacity-95">
+                {retryNote}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-primary text-sm"
+                disabled={retrying || !bookQuery.data}
+                onClick={() => retryMutation.mutate()}
+              >
+                {retrying ? 'Yeniden başlıyor…' : 'Ünite ayırmayı tekrar dene'}
+              </button>
+              <Link
+                to={bookId ? `/books/${bookId}/read` : '/'}
+                className="btn-ghost text-sm"
+              >
+                PDF’den devam et
+              </Link>
+              <Link to="/library" className="btn-ghost text-sm">
+                Kitaplığım
+              </Link>
+            </div>
           </div>
         )}
       </section>

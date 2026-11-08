@@ -8,6 +8,7 @@ import type {
 } from '@/types/pdfSelection'
 import PageJumpControl from '@/components/PageJumpControl'
 import SelectionActionBar from '@/components/SelectionActionBar'
+import PdfAskCorner from '@/components/PdfAskCorner'
 import PdfInsertBlock from '@/components/PdfInsertBlock'
 import PdfOutlinePanel from '@/components/PdfOutlinePanel'
 import {
@@ -76,6 +77,12 @@ type Props = {
     annotationId?: string
   } | null
   onFocusHandled?: () => void
+  /** Dim the page; keep selection bands + inserts vivid (focus theater). */
+  theater?: boolean
+  /**
+   * Grow with page height; parent shell scrolls so a sticky AI rail can follow.
+   */
+  flowScroll?: boolean
 }
 
 type PageView = {
@@ -124,6 +131,8 @@ export default function PdfViewer({
   hideChrome = false,
   focusTarget = null,
   onFocusHandled,
+  theater = false,
+  flowScroll = false,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const pageHostRef = useRef<HTMLDivElement>(null)
@@ -157,8 +166,17 @@ export default function PdfViewer({
   const [outline, setOutline] = useState<PdfOutlineItem[]>([])
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [editBusy, setEditBusy] = useState(false)
+  const [askEmphasize, setAskEmphasize] = useState(false)
+  const [askNudge, setAskNudge] = useState(false)
+  const askNudgeTimer = useRef<number | null>(null)
   const [docEpoch, setDocEpoch] = useState(0)
   const docRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (askNudgeTimer.current) window.clearTimeout(askNudgeTimer.current)
+    }
+  }, [])
 
   /** Marquee mode for charts / figures (vision) — not text selection. */
   const [areaMode, setAreaMode] = useState(false)
@@ -297,6 +315,42 @@ export default function PdfViewer({
   const clearSelection = () => {
     wordSel.clear()
     nativeSel.clear()
+    setAskEmphasize(false)
+  }
+
+  function payloadFromSnap(
+    snap: NonNullable<ReturnType<typeof snapshot>>,
+  ): PdfSelectionPayload {
+    const regions = regionsFromSelBands()
+    const region =
+      regionFromSelBands() ||
+      selectionRegion(snap.selectedText) ||
+      regionFromSnap(snap.rect, pageHostRef.current, pageView)
+    let paperColor: string | undefined
+    try {
+      const src = raster?.canvas || canvasRef.current
+      const cctx = src?.getContext('2d')
+      if (cctx && region && pageView) {
+        paperColor = samplePaperColor(
+          cctx,
+          region,
+          pageView.width,
+          pageView.height,
+        )
+      }
+    } catch {
+      /* ignore */
+    }
+    return {
+      selectedText: snap.selectedText,
+      precedingContext: snap.precedingContext,
+      followingContext: snap.followingContext,
+      page,
+      textStyle: snap.textStyle,
+      region,
+      regions,
+      paperColor,
+    }
   }
   const hold = () => {
     wordSel.hold()
@@ -1010,11 +1064,14 @@ export default function PdfViewer({
       return
     }
 
-    // AI / note → parent side panel (no page band slicing)
+    // AI / note → parent shadow panel (no page navigation / modal)
     if (
       action === 'ask' ||
       action === 'summarize' ||
       action === 'explain' ||
+      action === 'translate' ||
+      action === 'listen' ||
+      action === 'mindmap' ||
       action === 'note' ||
       action === 'cite'
     ) {
@@ -1314,7 +1371,9 @@ export default function PdfViewer({
 
   return (
     <div
-      className={`pdf-viewer ${className}${outlineOpen ? ' pdf-viewer--outline' : ''}`}
+      className={`pdf-viewer ${className}${outlineOpen ? ' pdf-viewer--outline' : ''}${
+        theater ? ' pdf-viewer--theater' : ''
+      }${flowScroll ? ' pdf-viewer--flow' : ''}`}
     >
       {!hideChrome ? (
         <div className="pdf-viewer__chrome">
@@ -1632,12 +1691,22 @@ export default function PdfViewer({
                 e.clientY,
                 host.getBoundingClientRect(),
               )
-              if (hit) {
-                e.preventDefault()
-                e.stopPropagation()
+              if (!hit) return
+              e.preventDefault()
+              e.stopPropagation()
+              // Alt+çift tık → kelime düzenle; düz çift tık → paragraf + Sor
+              if (e.altKey) {
                 clearSelection()
                 openWordEditor(originalWordGroup(hit.id) || hit)
+                return
               }
+              // Paragraph already selected by wordSel double-click; open Ask shadow
+              window.setTimeout(() => {
+                const snap = snapshot()
+                if (!snap?.selectedText.trim()) return
+                setAskEmphasize(true)
+                onAction?.(payloadFromSnap(snap), 'ask')
+              }, 0)
             }}
           >
             {hasFlowInserts && raster
@@ -1700,7 +1769,7 @@ export default function PdfViewer({
                       width: Math.max(g.width, 4),
                       height: g.fontHeight + 4,
                     }}
-                    title={`${g.currentText} — çift tık: düzenle · sürükle: seç · üç tık: satır`}
+                    title={`${g.currentText} — çift tık: sor · Alt+çift: düzenle · sürükle: seç`}
                   />
                 ))}
             </div>
@@ -1845,6 +1914,31 @@ export default function PdfViewer({
               })}
             </div>
           ) : null}
+
+            {onAction && !hideChrome && !editBusy && !wordDraft ? (
+              <PdfAskCorner
+                active={!!selection?.selectedText.trim() || askEmphasize}
+                nudge={askNudge}
+                hold={hold}
+                onAsk={() => {
+                  const snap = snapshot()
+                  if (snap?.selectedText.trim()) {
+                    setAskEmphasize(true)
+                    setAskNudge(false)
+                    onAction(payloadFromSnap(snap), 'ask')
+                    return
+                  }
+                  setAskNudge(true)
+                  if (askNudgeTimer.current) {
+                    window.clearTimeout(askNudgeTimer.current)
+                  }
+                  askNudgeTimer.current = window.setTimeout(() => {
+                    setAskNudge(false)
+                    askNudgeTimer.current = null
+                  }, 2200)
+                }}
+              />
+            ) : null}
           </div>
 
           {marginNotes.length > 0 && (pageView || raster) ? (
@@ -1906,6 +2000,7 @@ export default function PdfViewer({
               hold={hold}
               onAction={fire}
               style={toolbarStyle}
+              emphasizeAsk={askEmphasize}
             />
           ) : null}
           {showAreaToolbar ? (

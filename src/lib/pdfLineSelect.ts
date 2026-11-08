@@ -91,6 +91,61 @@ export function findWordIndexAt(
   return best
 }
 
+/**
+ * Expand from a word to a visual “paragraph”: contiguous lines until a
+ * larger-than-usual vertical gap (PDF paragraph break).
+ */
+export function paragraphRangeContaining(
+  sorted: PdfWordGroup[],
+  index: number,
+): { start: number; end: number } {
+  if (!sorted.length || index < 0 || index >= sorted.length) {
+    return { start: Math.max(0, index), end: Math.max(0, index) }
+  }
+  const lines = clusterWordLines(sorted)
+  let lineIdx = -1
+  const target = sorted[index]!
+  for (let li = 0; li < lines.length; li++) {
+    if (lines[li]!.some((w) => w.id === target.id)) {
+      lineIdx = li
+      break
+    }
+  }
+  if (lineIdx < 0) return { start: index, end: index }
+
+  const gapBetween = (a: PdfWordGroup[], b: PdfWordGroup[]) => {
+    const aBottom = Math.max(...a.map((w) => w.top + w.fontHeight))
+    const bTop = Math.min(...b.map((w) => w.top))
+    const typical = Math.max(
+      LINE_SLOP * 2,
+      (a[0]!.fontHeight + b[0]!.fontHeight) * 0.85,
+    )
+    return bTop - aBottom > typical
+  }
+
+  let lo = lineIdx
+  let hi = lineIdx
+  while (lo > 0 && !gapBetween(lines[lo - 1]!, lines[lo]!)) lo -= 1
+  while (hi < lines.length - 1 && !gapBetween(lines[hi]!, lines[hi + 1]!)) {
+    hi += 1
+  }
+
+  const ids = new Set<string>()
+  for (let li = lo; li <= hi; li++) {
+    for (const w of lines[li]!) ids.add(w.id)
+  }
+  let start = sorted.length
+  let end = -1
+  for (let i = 0; i < sorted.length; i++) {
+    if (ids.has(sorted[i]!.id)) {
+      start = Math.min(start, i)
+      end = Math.max(end, i)
+    }
+  }
+  if (start > end) return { start: index, end: index }
+  return { start, end }
+}
+
 export function lineRangeContaining(
   sorted: PdfWordGroup[],
   index: number,

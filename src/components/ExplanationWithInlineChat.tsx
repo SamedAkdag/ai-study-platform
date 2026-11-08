@@ -19,6 +19,7 @@ import {
 } from '@/hooks/useTextSelection'
 import StudyMarkdown from '@/components/StudyMarkdown'
 import TtsControls from '@/components/TtsControls'
+import LessonWaitMood from '@/components/LessonWaitMood'
 
 type Depth = 'brief' | 'standard' | 'detailed'
 
@@ -332,12 +333,16 @@ export default function ExplanationWithInlineChat({
         />
       </div>
 
-      {tts.status !== 'idle' && tts.status !== 'unsupported' && tts.chunkInfo && (
-        <p className="study-now-reading line-clamp-2">
-          {tts.status === 'paused' ? 'Duraklatıldı · ' : 'Okunuyor · '}
-          {tts.chunkInfo.text}
-        </p>
-      )}
+      {tts.status !== 'idle' && tts.status !== 'unsupported' ? (
+        <div className="mb-3">
+          <LessonWaitMood
+            kind="speaking"
+            size="compact"
+            title={tts.status === 'paused' ? 'Duraklatıldı' : 'Hoca okuyor'}
+            detail={tts.chunkInfo?.text || null}
+          />
+        </div>
+      ) : null}
 
       <article
         ref={articleRef}

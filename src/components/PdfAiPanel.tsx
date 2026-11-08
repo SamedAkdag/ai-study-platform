@@ -6,44 +6,58 @@ import {
   type PageSource,
 } from '@/lib/sourceLookup'
 import StudyMarkdown from '@/components/StudyMarkdown'
+import LessonWaitMood from '@/components/LessonWaitMood'
 import type { PdfSelectionPayload } from '@/components/PdfViewer'
+import {
+  createBrowserSpeechSession,
+  isBrowserSpeechRecognitionSupported,
+  type BrowserSpeechSession,
+  type SpeechRecStatus,
+} from '@/lib/browserSpeechRecognition'
+import {
+  getStoredLang,
+  getStoredRate,
+  getStoredVoiceUri,
+  speakText,
+  stopSpeech,
+  toLectureSpeechText,
+} from '@/lib/tts'
+import { getPdfAiAutoSpeak, setPdfAiAutoSpeak } from '@/lib/pdfSpeak'
+
+type AiMode = 'ask' | 'summarize' | 'explain' | 'translate'
 
 type Props = {
   chapterId: string
   chapterTitle: string
   payload: PdfSelectionPayload | null
-  mode: 'ask' | 'summarize' | 'explain' | null
+  mode: AiMode | null
   onClose: () => void
   pageSources?: PageSource[] | null
   onJumpPage?: (page: number) => void
-  /** Seçimin bittiği yere AI kartı ekle. */
   onSaveToBook?: (body: string, question?: string) => void | Promise<void>
+  seedQuestion?: string | null
 }
 
 type ChatTurn = { role: 'user' | 'assistant'; content: string }
 
-const MODE_Q: Record<'ask' | 'summarize' | 'explain', string> = {
+const MODE_Q: Record<AiMode, string> = {
   summarize:
-    'Seçili pasajı kısa ve net özetle. Madde işaretleri kullan; gereksiz uzatma.',
+    'Seçili pasajı 2–3 kısa cümleyle özetle. Madde işaretleri kullan; uzatma.',
   explain:
-    'Seçili pasajı bir öğrenciye açıkla: tanım, neden önemli, 1 günlük hayat benzetmesi.',
-  ask: 'Seçili pasaj hakkında net ve öğretici bir açıklama yap. Anlaşılmayan noktaları aç.',
+    'Seçili pasajı 2–3 cümlede açıkla: ne, neden önemli, 1 basit benzetme.',
+  translate:
+    'Seçili pasajı açık ve doğal Türkçeye çevir. Gerekirse 1 cümle not ekle.',
+  ask: 'Seçili pasajı bir öğrenciye anlatır gibi yanıtla. Net, sıcak, 4–8 cümle.',
 }
 
-const MODE_Q_FIGURE: Record<'ask' | 'summarize' | 'explain', string> = {
+const MODE_Q_FIGURE: Record<AiMode, string> = {
   summarize:
-    'Seçili grafiği / şekli kısa özetle: neyi gösteriyor, ana eğilim, 2–4 madde.',
+    'Seçili grafiği / şekli 2–3 maddede özetle: neyi gösteriyor, ana eğilim.',
   explain:
-    'Seçili grafiği / şekli bir öğrenciye açıkla: eksenler, birimler, eğri/çubuk anlamı, neden önemli, 1 benzetme.',
-  ask: 'Seçili grafiği / şekli incele ve öğretici bir açıklama yap. Okuyamadığın değeri uydurma.',
+    'Seçili grafiği / şekli kısaca açıkla: eksenler, birimler, neden önemli.',
+  translate: 'Grafik / şekil üzerindeki metinleri Türkçeye çevir.',
+  ask: 'Seçili grafiği / şekli bir öğrenciye anlatır gibi açıkla. Uydurma.',
 }
-
-const SYNTH_PROMPT = `Aşağıdaki sohbeti (ilk anlatım + sonraki soru-cevaplar) tek bir ders notuna dönüştür.
-Kurallar:
-- Tekrarları birleştir; çelişki varsa en net / görüntüye dayalı olanı seç.
-- Markdown: kısa başlıklar, maddeler, mümkünse 1 küçük tablo.
-- Kaynakta / görüntüde olmayanı uydurma.
-- Öğrencinin kitaba ekleyeceği nihai not olsun; sohbet üslubu kullanma.`
 
 const REQUEST_TIMEOUT_MS = 90_000
 
@@ -60,7 +74,7 @@ async function askTimed(
   ])
 }
 
-/** PDF seçim AI paneli — sohbet + isteğe bağlı nihai not. */
+/** Shadow AI rail — Hocaya sor + TTS, never a modal. */
 export default function PdfAiPanel({
   chapterId,
   chapterTitle,
@@ -70,21 +84,34 @@ export default function PdfAiPanel({
   pageSources = null,
   onJumpPage,
   onSaveToBook,
+  seedQuestion = null,
 }: Props) {
   const [loading, setLoading] = useState(false)
-  const [synthLoading, setSynthLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [question, setQuestion] = useState('')
   const [history, setHistory] = useState<ChatTurn[]>([])
-  const [draftNote, setDraftNote] = useState<string | null>(null)
+  const [speaking, setSpeaking] = useState(false)
+  const [autoSpeak, setAutoSpeak] = useState(() => getPdfAiAutoSpeak())
+  const [micStatus, setMicStatus] = useState<SpeechRecStatus>(
+    isBrowserSpeechRecognitionSupported() ? 'idle' : 'unsupported',
+  )
+  const [interim, setInterim] = useState('')
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<ChatTurn[]>([])
+  const inputRef = useRef<HTMLInputElement>(null)
+  const speechRef = useRef<BrowserSpeechSession | null>(null)
+  const voiceOkRef = useRef(true)
+  const autoSpeakRef = useRef(autoSpeak)
+  const askGenRef = useRef(0)
+  autoSpeakRef.current = autoSpeak
 
   const metaRef = useRef({ chapterId, chapterTitle })
   metaRef.current = { chapterId, chapterTitle }
 
   const isFigure = payload?.kind === 'region' && !!payload.imageDataUrl
+  const lectureMode = mode === 'ask'
   const selectionKey = payload
     ? `${payload.page}::${payload.kind || 'text'}::${
         payload.imageDataUrl
@@ -99,143 +126,232 @@ export default function PdfAiPanel({
     return findRelatedPassages(pageSources, payload.selectedText, 3)
   }, [payload, pageSources])
 
-  const followUpCount = history.filter((h) => h.role === 'user').length
-  const canSynth = history.some((h) => h.role === 'assistant')
-
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  }, [history, draftNote, loading])
+  }, [history, loading])
+
+  useEffect(() => {
+    voiceOkRef.current = true
+    return () => {
+      voiceOkRef.current = false
+      askGenRef.current += 1
+      stopSpeech()
+      speechRef.current?.abort()
+    }
+  }, [])
+
+  useEffect(() => {
+    threadRef.current = []
+    setHistory([])
+    stopSpeech()
+    setSpeaking(false)
+    speechRef.current?.abort()
+    setInterim('')
+  }, [selectionKey])
+
+  function speakAnswer(text: string) {
+    const spoken = toLectureSpeechText(text) || text.trim()
+    if (!spoken) return
+    speakText(spoken, {
+      rate: getStoredRate(),
+      voiceUri: getStoredVoiceUri(),
+      lang: getStoredLang(),
+      onStatus: (s) => {
+        if (!voiceOkRef.current) {
+          stopSpeech()
+          setSpeaking(false)
+          return
+        }
+        setSpeaking(s === 'speaking' || s === 'paused')
+      },
+      onEnd: () => setSpeaking(false),
+    })
+  }
+
+  function stopVoice() {
+    stopSpeech()
+    setSpeaking(false)
+  }
+
+  function finishAnswer(raw: string, prior: ChatTurn[], opener: string) {
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      setError('AI boş yanıt döndü. Tekrar dene.')
+      return
+    }
+    const content =
+      lectureMode || mode === 'explain'
+        ? toLectureSpeechText(trimmed) || trimmed
+        : trimmed
+    const next: ChatTurn[] = [
+      ...prior,
+      { role: 'user', content: opener },
+      { role: 'assistant', content },
+    ]
+    threadRef.current = next
+    setHistory(next)
+    if (
+      autoSpeakRef.current &&
+      (lectureMode || mode === 'explain' || mode === 'summarize')
+    ) {
+      speakAnswer(content)
+    }
+  }
 
   useEffect(() => {
     if (!payload || !mode) return
     setError(null)
     setSaving(false)
     setSaveMsg(null)
-    setHistory([])
     setQuestion('')
-    setDraftNote(null)
 
-    // ask: kullanıcı ilk soruyu yazar; summarize/explain otomatik başlar
-    if (mode === 'ask') return
+    if (mode === 'ask' && !seedQuestion) {
+      window.setTimeout(() => inputRef.current?.focus(), 40)
+      return
+    }
 
     let cancelled = false
+    const gen = ++askGenRef.current
     setLoading(true)
-
-    const prompts = payload.kind === 'region' ? MODE_Q_FIGURE : MODE_Q
-    const isRegion = payload.kind === 'region'
-    const opener = prompts[mode]
+    const prompts = isFigure ? MODE_Q_FIGURE : MODE_Q
+    const opener = seedQuestion?.trim() || prompts[mode]
+    const prior = threadRef.current
 
     void askTimed({
       chapterId: metaRef.current.chapterId,
       chapterTitle: metaRef.current.chapterTitle,
-      selectedText: isRegion ? '' : payload.selectedText,
+      selectedText: isFigure ? '' : payload.selectedText,
       precedingContext: payload.precedingContext,
       followingContext: payload.followingContext,
       question: opener,
-      history: [],
+      history: prior,
       imageDataUrl: payload.imageDataUrl,
-      requireImage: isRegion,
+      requireImage: isFigure,
+      answerFormat: mode === 'ask' ? 'lecture' : 'notes',
     })
       .then((text) => {
-        if (cancelled) return
-        const trimmed = text.trim()
-        if (!trimmed) {
-          setError('AI boş yanıt döndü. Tekrar dene.')
-          return
-        }
-        setHistory([
-          { role: 'user', content: opener },
-          { role: 'assistant', content: trimmed },
-        ])
+        if (cancelled || gen !== askGenRef.current) return
+        finishAnswer(text, prior, opener)
       })
       .catch((err) => {
-        if (cancelled) return
-        setError(friendlyAiError(err))
+        if (!cancelled && gen === askGenRef.current) {
+          setError(friendlyAiError(err))
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && gen === askGenRef.current) setLoading(false)
       })
 
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
-  }, [selectionKey, mode])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionKey, mode, seedQuestion])
 
   function selectionArgs() {
     if (!payload) return null
-    const isRegion = payload.kind === 'region'
     return {
       chapterId: metaRef.current.chapterId,
       chapterTitle: metaRef.current.chapterTitle,
-      selectedText: isRegion ? '' : payload.selectedText,
+      selectedText: isFigure ? '' : payload.selectedText,
       precedingContext: payload.precedingContext,
       followingContext: payload.followingContext,
       imageDataUrl: payload.imageDataUrl,
-      requireImage: isRegion,
+      requireImage: isFigure,
     }
   }
 
-  async function sendAsk(e: FormEvent) {
-    e.preventDefault()
+  async function sendAsk(e?: FormEvent, override?: string) {
+    e?.preventDefault()
     const base = selectionArgs()
-    if (!payload || !base || !question.trim() || loading) return
+    const q = (override ?? question).trim()
+    if (!payload || !base || !q || loading) return
     setLoading(true)
     setError(null)
     setSaveMsg(null)
-    const q = question.trim()
     setQuestion('')
+    const gen = ++askGenRef.current
+    const prior = threadRef.current
     try {
       const text = await askTimed({
         ...base,
         question: q,
-        history,
+        history: prior,
+        answerFormat: lectureMode ? 'lecture' : 'notes',
       })
-      const trimmed = text.trim()
-      if (!trimmed) {
-        setError('AI boş yanıt döndü. Tekrar dene.')
-        return
-      }
-      setHistory((h) => [
-        ...h,
-        { role: 'user', content: q },
-        { role: 'assistant', content: trimmed },
-      ])
+      if (gen !== askGenRef.current) return
+      finishAnswer(text, prior, q)
     } catch (err) {
-      setError(friendlyAiError(err))
+      if (gen === askGenRef.current) setError(friendlyAiError(err))
     } finally {
-      setLoading(false)
+      if (gen === askGenRef.current) setLoading(false)
     }
   }
 
-  async function synthesizeNote() {
-    const base = selectionArgs()
-    if (!payload || !base || !canSynth || synthLoading) return
-    setSynthLoading(true)
+  function stopMic() {
+    speechRef.current?.abort()
+    speechRef.current = null
+    setInterim('')
+    setMicStatus((s) => (s === 'unsupported' ? s : 'idle'))
+  }
+
+  function toggleMic() {
+    if (loading) return
+    if (micStatus === 'unsupported') {
+      setError(
+        'Bu tarayıcıda sesle yazma yok. Chrome veya Edge dene; soruyu yazabilirsin.',
+      )
+      return
+    }
+    if (micStatus === 'listening') {
+      stopMic()
+      return
+    }
+    stopVoice()
+    setError(null)
+    const base = question.replace(/\s+$/, '')
+    setInterim('')
+    speechRef.current?.abort()
+    const session = createBrowserSpeechSession({
+      onStatus: setMicStatus,
+      onInterim: (t) => {
+        setInterim(t)
+        setQuestion(base ? `${base} ${t}`.trim() : t)
+      },
+      onFinal: (t) => {
+        const next = base ? `${base} ${t}`.trim() : t
+        setQuestion(next)
+        setInterim('')
+      },
+      onErrorMessage: (msg) => setError(msg),
+    })
+    if (!session) {
+      setMicStatus('unsupported')
+      setError('Ses tanıma desteklenmiyor.')
+      return
+    }
+    speechRef.current = session
+    session.start()
+  }
+
+  function newChat() {
+    askGenRef.current += 1
+    threadRef.current = []
+    setHistory([])
     setError(null)
     setSaveMsg(null)
-    try {
-      const transcript = history
-        .map((t) =>
-          t.role === 'user' ? `Öğrenci: ${t.content}` : `Asistan: ${t.content}`,
-        )
-        .join('\n\n')
-      const text = await askTimed({
-        ...base,
-        question: `${SYNTH_PROMPT}\n\n--- SOHBET ---\n${transcript}`,
-        history: [],
-      })
-      const trimmed = text.trim()
-      if (!trimmed) {
-        setError('Nihai not boş geldi. Tekrar dene.')
-        return
-      }
-      setDraftNote(trimmed)
-    } catch (err) {
-      setError(friendlyAiError(err))
-    } finally {
-      setSynthLoading(false)
-    }
+    setQuestion('')
+    stopVoice()
+    stopMic()
+    inputRef.current?.focus()
+  }
+
+  function handleClose() {
+    voiceOkRef.current = false
+    askGenRef.current += 1
+    stopVoice()
+    stopMic()
+    onClose()
   }
 
   function saveBody(body: string, questionLabel?: string) {
@@ -244,7 +360,7 @@ export default function PdfAiPanel({
     setSaveMsg(null)
     void Promise.resolve(onSaveToBook(body, questionLabel))
       .then(() => {
-        setSaveMsg('Seçimin altına eklendi')
+        setSaveMsg('Sayfana eklendi')
         setSaving(false)
       })
       .catch((err) => {
@@ -259,31 +375,45 @@ export default function PdfAiPanel({
     .reverse()
     .find((h) => h.role === 'assistant')?.content
 
-  const title = isFigure
-    ? mode === 'summarize'
-      ? 'Grafik · sohbet'
+  const title =
+    mode === 'summarize'
+      ? 'Özet'
       : mode === 'explain'
-        ? 'Grafik · sohbet'
-        : 'Grafik · AI’ya sor'
-    : mode === 'summarize'
-      ? 'PDF · sohbet'
-      : mode === 'explain'
-        ? 'PDF · sohbet'
-        : 'PDF · AI’ya sor'
+        ? 'Açıkla'
+        : mode === 'translate'
+          ? 'Çevir'
+          : "AI'a sor"
+
+  const listening = micStatus === 'listening'
 
   return (
-    <div className="pdf-ai-panel surface-panel">
+    <div className="pdf-ai-panel pdf-ai-panel--shadow surface-panel">
       <div className="mb-2 flex items-start justify-between gap-2">
         <div>
           <p className="section-label mb-0.5">{title}</p>
           <p className="muted text-[11px]">
             s. {payload.page}
-            {followUpCount > 1 ? ` · ${followUpCount} soru` : ''}
+            {history.length > 0 ? ` · ${Math.ceil(history.length / 2)} tur` : ''}
+            {speaking ? ' · okunuyor' : ''}
           </p>
         </div>
-        <button type="button" className="btn-ghost text-xs" onClick={onClose}>
-          Kapat
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            onClick={newChat}
+            title="Thread’i temizle"
+          >
+            Yeni sohbet
+          </button>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            onClick={handleClose}
+          >
+            Kapat
+          </button>
+        </div>
       </div>
 
       {isFigure && payload.imageDataUrl ? (
@@ -293,30 +423,20 @@ export default function PdfAiPanel({
             alt="Seçilen grafik / şekil"
             className="pdf-ai-panel__figure-img"
           />
-          {(payload.precedingContext || payload.followingContext) && (
-            <p className="pdf-ai-panel__figure-ctx muted text-[11px]">
-              {payload.precedingContext
-                ? `Üst: “${payload.precedingContext.slice(0, 90)}${
-                    payload.precedingContext.length > 90 ? '…' : ''
-                  }”`
-                : null}
-              {payload.precedingContext && payload.followingContext
-                ? ' · '
-                : null}
-              {payload.followingContext
-                ? `Alt: “${payload.followingContext.slice(0, 90)}${
-                    payload.followingContext.length > 90 ? '…' : ''
-                  }”`
-                : null}
-            </p>
-          )}
         </div>
       ) : (
         <blockquote className="pdf-ai-panel__quote">
-          {payload.selectedText.slice(0, 280)}
-          {payload.selectedText.length > 280 ? '…' : ''}
+          {payload.selectedText.slice(0, 180)}
+          {payload.selectedText.length > 180 ? '…' : ''}
         </blockquote>
       )}
+
+      {lectureMode && history.length === 0 && !loading ? (
+        <p className="muted text-xs mb-2">
+          Yaz veya mikrofonla sor
+          {autoSpeak ? ' — yanıt otomatik sesli okunur.' : '.'}
+        </p>
+      ) : null}
 
       <div className="pdf-ai-panel__chat" aria-live="polite">
         {history.map((turn, i) => (
@@ -324,11 +444,23 @@ export default function PdfAiPanel({
             key={`${turn.role}-${i}`}
             className={`pdf-ai-panel__bubble pdf-ai-panel__bubble--${turn.role}`}
           >
-            <p className="pdf-ai-panel__bubble-label">
-              {turn.role === 'user' ? 'Sen' : 'Studium'}
-            </p>
+            <div className="pdf-ai-panel__bubble-head">
+              <p className="pdf-ai-panel__bubble-label">
+                {turn.role === 'user' ? 'Sen' : lectureMode ? 'Hoca' : 'Studium'}
+              </p>
+              {turn.role === 'assistant' ? (
+                <button
+                  type="button"
+                  className="pdf-ai-panel__speak"
+                  title="Sesli oku"
+                  onClick={() => speakAnswer(turn.content)}
+                >
+                  🔊
+                </button>
+              ) : null}
+            </div>
             {turn.role === 'assistant' ? (
-              <div className="prose study-textbook max-w-none text-sm">
+              <div className="prose study-textbook max-w-none text-sm pdf-ai-panel__answer">
                 <StudyMarkdown markdown={turn.content} />
               </div>
             ) : (
@@ -339,95 +471,119 @@ export default function PdfAiPanel({
         <div ref={chatEndRef} />
       </div>
 
-      {loading && <p className="muted mt-2 text-sm">Düşünüyor…</p>}
-      {error && <div className="alert-error mt-2">{error}</div>}
+      {loading ? (
+        <div className="mt-2">
+          <LessonWaitMood kind="thinking" size="compact" />
+        </div>
+      ) : null}
+      {listening ? (
+        <div className="mt-2">
+          <LessonWaitMood
+            kind="speaking"
+            size="compact"
+            title="Seni dinliyor"
+            detail={interim ? `“${interim}”` : 'Konuş, bitince mikrofona bas'}
+          />
+        </div>
+      ) : null}
+      {error ? <div className="alert-error mt-2">{error}</div> : null}
 
-      <form onSubmit={(e) => void sendAsk(e)} className="mt-3 flex gap-2">
+      <form
+        onSubmit={(e) => void sendAsk(e)}
+        className="mt-3 flex gap-2 items-center"
+      >
+        <button
+          type="button"
+          className={`pdf-ai-panel__mic${listening ? ' is-on' : ''}`}
+          disabled={loading}
+          aria-pressed={listening}
+          aria-label={listening ? 'Dinlemeyi durdur' : 'Sesle sor'}
+          title={
+            micStatus === 'unsupported'
+              ? 'Bu tarayıcıda ses tanıma yok'
+              : listening
+                ? 'Durdur'
+                : 'Mikrofon'
+          }
+          onClick={toggleMic}
+        >
+          {listening ? '◼' : '🎤'}
+        </button>
         <input
+          ref={inputRef}
           className="field flex-1 text-sm"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           placeholder={
-            history.length === 0 && mode === 'ask'
-              ? 'Ne sormak istersin?'
-              : 'Devam sorusu… (eksen, eğilim, örnek…)'
+            listening
+              ? 'Konuşuyorsun…'
+              : history.length === 0 && mode === 'ask'
+                ? 'Ne sormak istersin?'
+                : 'Devam et…'
           }
-          disabled={loading || synthLoading}
+          disabled={loading}
           autoFocus={mode === 'ask'}
         />
         <button
           type="submit"
           className="btn-primary shrink-0"
-          disabled={loading || synthLoading || !question.trim()}
+          disabled={loading || !question.trim()}
         >
           Gönder
         </button>
       </form>
 
-      {canSynth && onSaveToBook ? (
-        <div className="pdf-ai-panel__actions mt-3">
-          {lastAssistant ? (
-            <button
-              type="button"
-              className="btn-ghost text-xs"
-              disabled={saving || loading || synthLoading}
-              onClick={() => {
-                const firstUser = history.find((h) => h.role === 'user')?.content
-                saveBody(lastAssistant, firstUser)
-              }}
-            >
-              Son yanıtı ekle
-            </button>
-          ) : null}
+      <label className="pdf-ai-panel__auto">
+        <input
+          type="checkbox"
+          checked={autoSpeak}
+          onChange={(e) => {
+            const on = e.target.checked
+            setAutoSpeak(on)
+            setPdfAiAutoSpeak(on)
+            if (!on) stopVoice()
+          }}
+        />
+        Yanıtı otomatik sesli oku
+      </label>
+
+      <div className="pdf-ai-panel__actions mt-3">
+        {lastAssistant && onSaveToBook ? (
           <button
             type="button"
             className="btn-primary text-xs"
-            disabled={saving || loading || synthLoading}
-            onClick={() => void synthesizeNote()}
+            disabled={saving || loading}
+            onClick={() => {
+              const firstUser = history.find((h) => h.role === 'user')?.content
+              saveBody(lastAssistant, firstUser)
+            }}
           >
-            {synthLoading
-              ? 'Not hazırlanıyor…'
-              : 'Konuşmadan ders notu üret'}
+            {saving ? 'Ekleniyor…' : 'Karta dönüştür'}
           </button>
-          {saveMsg ? (
-            <span className="muted text-[11px]">{saveMsg}</span>
-          ) : null}
-        </div>
-      ) : null}
-
-      {draftNote ? (
-        <div className="pdf-ai-panel__draft mt-3">
-          <p className="section-label mb-1.5">Nihai ders notu</p>
-          <div className="prose study-textbook max-w-none text-sm">
-            <StudyMarkdown markdown={draftNote} />
-          </div>
-          {onSaveToBook ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="btn-primary text-xs"
-                disabled={saving}
-                onClick={() =>
-                  saveBody(
-                    draftNote,
-                    'Sohbetten üretilen ders notu',
-                  )
-                }
-              >
-                {saving ? 'Ekleniyor…' : 'Bu notu seçimin altına ekle'}
-              </button>
-              <button
-                type="button"
-                className="btn-ghost text-xs"
-                disabled={synthLoading}
-                onClick={() => void synthesizeNote()}
-              >
-                Yeniden üret
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+        ) : null}
+        {lastAssistant ? (
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={loading}
+            onClick={() =>
+              speaking ? stopVoice() : speakAnswer(lastAssistant)
+            }
+          >
+            {speaking ? 'Durdur' : 'Sesli oku'}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="btn-ghost text-xs"
+          onClick={handleClose}
+        >
+          Kapat
+        </button>
+        {saveMsg ? (
+          <span className="muted text-[11px]">{saveMsg}</span>
+        ) : null}
+      </div>
 
       {sourceHits.length > 0 ? (
         <div className="pdf-ai-panel__sources">
@@ -444,8 +600,8 @@ export default function PdfAiPanel({
                     s. {hit.page}
                   </span>
                   <span className="pdf-ai-panel__source-ex">
-                    {hit.excerpt.slice(0, 160)}
-                    {hit.excerpt.length > 160 ? '…' : ''}
+                    {hit.excerpt.slice(0, 120)}
+                    {hit.excerpt.length > 120 ? '…' : ''}
                   </span>
                 </button>
               </li>

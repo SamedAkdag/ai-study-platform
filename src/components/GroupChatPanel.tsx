@@ -8,6 +8,7 @@ import {
   postGroupMessage,
   shortRole,
 } from '@/lib/groupChat'
+import { friendlyAiError } from '@/lib/errors'
 import type { GroupMember } from '@/types/database'
 
 type Props = {
@@ -119,13 +120,22 @@ export default function GroupChatPanel({
             <p className="mt-0.5 whitespace-pre-wrap leading-relaxed">{m.body}</p>
           </div>
         ))}
-        {messagesQuery.isError && (
-          <p className="text-xs" style={{ color: 'var(--danger)' }}>
-            {messagesQuery.error instanceof Error
-              ? messagesQuery.error.message
-              : 'Mesajlar yüklenemedi (migration?)'}
-          </p>
-        )}
+        {messagesQuery.isError ? (
+          <div
+            className="flex flex-wrap items-center gap-2 text-xs"
+            style={{ color: 'var(--danger)' }}
+            role="alert"
+          >
+            <span>{friendlyAiError(messagesQuery.error)}</span>
+            <button
+              type="button"
+              className="btn-ghost text-[11px]"
+              onClick={() => void messagesQuery.refetch()}
+            >
+              Tekrar dene
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <form onSubmit={onSubmit} className="flex gap-2">
@@ -135,22 +145,38 @@ export default function GroupChatPanel({
           placeholder="Yorum veya soru yaz…"
           maxLength={2000}
           className="field !py-2 text-sm"
+          disabled={postMutation.isPending}
         />
         <button
           type="submit"
           className="btn-primary shrink-0 !px-3 !py-2 text-sm"
           disabled={postMutation.isPending || !draft.trim()}
         >
-          Gönder
+          {postMutation.isPending ? '…' : 'Gönder'}
         </button>
       </form>
-      {postMutation.isError && (
-        <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }}>
-          {postMutation.error instanceof Error
-            ? postMutation.error.message
-            : 'Gönderilemedi'}
+      {postMutation.isError ? (
+        <div
+          className="mt-2 flex flex-wrap items-center gap-2 text-xs"
+          style={{ color: 'var(--danger)' }}
+          role="alert"
+        >
+          <span>{friendlyAiError(postMutation.error)}</span>
+          <button
+            type="button"
+            className="btn-ghost text-[11px]"
+            disabled={postMutation.isPending || !draft.trim()}
+            onClick={() => postMutation.mutate()}
+          >
+            Tekrar dene
+          </button>
+        </div>
+      ) : null}
+      {deleteMutation.isError ? (
+        <p className="mt-2 text-xs" style={{ color: 'var(--danger)' }} role="alert">
+          {friendlyAiError(deleteMutation.error)}
         </p>
-      )}
+      ) : null}
     </div>
   )
 }

@@ -7,22 +7,21 @@ import {
 } from 'react'
 
 const STORAGE_KEY = 'studium.splitPdfRatio'
-/** PDF-first default — notes rail is secondary. */
-const DEFAULT_RATIO = 0.6
-const PRESETS = [
-  { id: '55', ratio: 0.55, label: '55' },
-  { id: '60', ratio: 0.6, label: '60' },
-  { id: '68', ratio: 0.68, label: '68' },
-] as const
+/** PDF kahraman (~70), AI gölge (~30). */
+const DEFAULT_RATIO = 0.7
 
 type Props = {
   left: ReactNode
   right: ReactNode
-  /** Label for the right pane (desktop toolbar). */
+  /** Label for the right pane (mobile tab). */
   rightLabel?: string
   /** Mobile: which pane is visible */
   mobilePane?: 'pdf' | 'notes'
   onMobilePaneChange?: (pane: 'pdf' | 'notes') => void
+  /** Hide notes rail so PDF fills the stage (reading room). */
+  collapseNotes?: boolean
+  /** Sticky AI rail while the PDF column scrolls (desktop). */
+  stickyAssist?: boolean
   className?: string
 }
 
@@ -37,13 +36,15 @@ export default function StudySplitPane({
   rightLabel = 'Notlar',
   mobilePane = 'notes',
   onMobilePaneChange,
+  collapseNotes = false,
+  stickyAssist = false,
   className = '',
 }: Props) {
   const [ratio, setRatio] = useState(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
       const n = raw ? Number(raw) : DEFAULT_RATIO
-      return Number.isFinite(n) ? clamp(n, 0.32, 0.68) : DEFAULT_RATIO
+      return Number.isFinite(n) ? clamp(n, 0.45, 0.82) : DEFAULT_RATIO
     } catch {
       return DEFAULT_RATIO
     }
@@ -52,7 +53,7 @@ export default function StudySplitPane({
   const shellRef = useRef<HTMLDivElement>(null)
 
   const persist = useCallback((r: number) => {
-    const next = clamp(r, 0.32, 0.68)
+    const next = clamp(r, 0.45, 0.82)
     setRatio(next)
     try {
       localStorage.setItem(STORAGE_KEY, String(next))
@@ -80,13 +81,16 @@ export default function StudySplitPane({
     }
   }, [persist])
 
-  const activePreset = PRESETS.find((p) => Math.abs(p.ratio - ratio) < 0.02)
-
   return (
-    <div className={`study-split ${className}`}>
-      <div className="study-split__toolbar">
+    <div
+      className={`study-split${collapseNotes ? ' study-split--pdf-focus' : ''}${
+        stickyAssist ? ' study-split--sticky-assist' : ''
+      }${className ? ` ${className}` : ''}`}
+    >
+      {/* Mobile-only: switch panes. Desktop always shows both. */}
+      {!collapseNotes ? (
         <div
-          className="study-split__mobile-tabs md:hidden mode-segment mode-segment--primary"
+          className="study-split__mobile-tabs mode-segment mode-segment--primary"
           role="tablist"
           aria-label="Panel"
         >
@@ -109,71 +113,54 @@ export default function StudySplitPane({
             {rightLabel}
           </button>
         </div>
-
-        <div
-          className="study-split__presets study-split__presets--quiet hidden md:flex"
-          role="group"
-          aria-label="PDF genişliği"
-        >
-          {PRESETS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={`study-split__preset${
-                activePreset?.id === p.id ? ' is-active' : ''
-              }`}
-              aria-pressed={activePreset?.id === p.id}
-              aria-label={`PDF %${p.label}`}
-              onClick={() => persist(p.ratio)}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      ) : null}
 
       <div ref={shellRef} className="study-split__shell">
         <div
           className={`study-split__pane study-split__pane--pdf ${
-            mobilePane === 'pdf' ? 'is-mobile-show' : ''
+            mobilePane === 'pdf' || collapseNotes ? 'is-mobile-show' : ''
           }`}
-          style={{ flexBasis: `${ratio * 100}%` }}
+          style={{ flexBasis: collapseNotes ? '100%' : `${ratio * 100}%` }}
         >
           {left}
         </div>
 
-        <div
-          className="study-split__handle hidden md:flex"
-          role="separator"
-          aria-orientation="vertical"
-          aria-valuenow={Math.round(ratio * 100)}
-          aria-label="PDF paneli genişliği"
-          title="Sürükle · çift tık 50%"
-          tabIndex={0}
-          onPointerDown={(e) => {
-            e.preventDefault()
-            dragging.current = true
-            document.body.style.cursor = 'col-resize'
-            document.body.style.userSelect = 'none'
-          }}
-          onDoubleClick={() => persist(DEFAULT_RATIO)}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowLeft') persist(ratio - 0.03)
-            if (e.key === 'ArrowRight') persist(ratio + 0.03)
-            if (e.key === 'Home') persist(DEFAULT_RATIO)
-          }}
-        >
-          <span />
-        </div>
+        {!collapseNotes ? (
+          <div
+            className="study-split__handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-valuenow={Math.round(ratio * 100)}
+            aria-label="PDF paneli genişliği"
+            title="Sürükle · çift tık varsayılan"
+            tabIndex={0}
+            onPointerDown={(e) => {
+              e.preventDefault()
+              dragging.current = true
+              document.body.style.cursor = 'col-resize'
+              document.body.style.userSelect = 'none'
+            }}
+            onDoubleClick={() => persist(DEFAULT_RATIO)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft') persist(ratio - 0.03)
+              if (e.key === 'ArrowRight') persist(ratio + 0.03)
+              if (e.key === 'Home') persist(DEFAULT_RATIO)
+            }}
+          >
+            <span />
+          </div>
+        ) : null}
 
-        <div
-          className={`study-split__pane study-split__pane--notes ${
-            mobilePane === 'notes' ? 'is-mobile-show' : ''
-          }`}
-          style={{ flexBasis: `${(1 - ratio) * 100}%` }}
-        >
-          <div className="study-split__notes-inner">{right}</div>
-        </div>
+        {!collapseNotes ? (
+          <div
+            className={`study-split__pane study-split__pane--notes ${
+              mobilePane === 'notes' ? 'is-mobile-show' : ''
+            }`}
+            style={{ flexBasis: `${(1 - ratio) * 100}%` }}
+          >
+            <div className="study-split__notes-inner">{right}</div>
+          </div>
+        ) : null}
       </div>
     </div>
   )

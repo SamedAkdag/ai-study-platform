@@ -16,6 +16,7 @@ import {
 } from '@/lib/tts'
 import { friendlyAiError } from '@/lib/errors'
 import EmaTts from '@/components/EmaTts'
+import LessonWaitMood from '@/components/LessonWaitMood'
 
 type Props = {
   title: string
@@ -186,18 +187,20 @@ export default function AudioOverviewPanel({
           </div>
 
           {genMutation.isPending ? (
-            <p className="muted text-xs">Hoca anlatımı yazılıyor…</p>
+            <LessonWaitMood kind="script" size="compact" />
+          ) : null}
+          {playing ? (
+            <LessonWaitMood kind="speaking" size="compact" />
           ) : null}
           {genMutation.isError ? (
             <p className="audio-overview__error text-xs" role="alert">
               {friendlyAiError(genMutation.error)} — taslak dinlenebilir.
             </p>
           ) : null}
-          {!genMutation.isPending ? (
+          {!genMutation.isPending && !playing ? (
             <p className="muted text-[11px]">
               {isAi ? 'AI · ' : 'Taslak · '}
               Ders anlatımı · ~{mins} dk
-              {playing ? ' · dinleniyor' : ''}
             </p>
           ) : null}
 

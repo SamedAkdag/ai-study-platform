@@ -1,4 +1,4 @@
-// Quick MiMo ping — same shape as Token Harbor Python example (plain chat, no JSON mode).
+// Quick AI Gateway ping (plain chat, no JSON mode).
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { callMimo, getMimoConfig } from '../_shared/mimo.ts'
@@ -18,7 +18,7 @@ serve(async (req) => {
     const { apiKey, baseURL, model } = getMimoConfig()
     if (!apiKey) {
       throw new Error(
-        'TOKENHARBOR_API_KEY missing in Edge secrets (or TOKEN_HARBOR_API_KEY)',
+        'REQUESTY_API_KEY missing in Edge secrets (AI_GATEWAY_* / TOKENHARBOR_* also accepted)',
       )
     }
 

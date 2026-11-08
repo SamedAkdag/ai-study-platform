@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth'
+import { friendlyAiError } from '@/lib/errors'
 import { listAcceptedFriends, sendStudyShare } from '@/lib/social'
 
 type Props = {
@@ -43,8 +44,7 @@ export default function SendStudyButton({
       setPicked(null)
       window.setTimeout(() => setOpen(false), 900)
     },
-    onError: (err) =>
-      setStatus(err instanceof Error ? err.message : 'Gönderilemedi'),
+    onError: (err) => setStatus(friendlyAiError(err) || 'Gönderilemedi'),
   })
 
   if (!user || !profile) {
@@ -82,6 +82,21 @@ export default function SendStudyButton({
               : 'Kabul edilmiş arkadaşlarından birine doğrudan gönder.'}
           </p>
           <ul className="max-h-36 space-y-1 overflow-y-auto text-sm">
+            {friendsQuery.isLoading ? (
+              <li className="muted text-xs">Arkadaşlar yükleniyor…</li>
+            ) : null}
+            {friendsQuery.isError ? (
+              <li className="text-xs" style={{ color: 'var(--danger)' }}>
+                {friendlyAiError(friendsQuery.error)}{' '}
+                <button
+                  type="button"
+                  className="btn-ghost text-[11px]"
+                  onClick={() => void friendsQuery.refetch()}
+                >
+                  Tekrar dene
+                </button>
+              </li>
+            ) : null}
             {(friendsQuery.data ?? []).map((f) => (
               <li key={f.user_id}>
                 <button
@@ -101,6 +116,7 @@ export default function SendStudyButton({
               </li>
             ))}
             {!friendsQuery.isLoading &&
+              !friendsQuery.isError &&
               (friendsQuery.data ?? []).length === 0 && (
                 <li className="muted text-xs">
                   Önce /social üzerinden arkadaş ekle.
@@ -118,11 +134,33 @@ export default function SendStudyButton({
             type="button"
             className="btn-primary text-xs"
             disabled={!picked || send.isPending}
-            onClick={() => send.mutate()}
+            onClick={() => {
+              setStatus(null)
+              send.mutate()
+            }}
           >
-            Gönder
+            {send.isPending ? 'Gönderiliyor…' : 'Gönder'}
           </button>
-          {status && <p className="muted text-[11px]">{status}</p>}
+          {status ? (
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              <span
+                className={send.isError ? '' : 'muted'}
+                style={send.isError ? { color: 'var(--danger)' } : undefined}
+              >
+                {status}
+              </span>
+              {send.isError && picked ? (
+                <button
+                  type="button"
+                  className="btn-ghost text-[11px]"
+                  disabled={send.isPending}
+                  onClick={() => send.mutate()}
+                >
+                  Tekrar dene
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
     </div>

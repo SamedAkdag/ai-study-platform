@@ -176,15 +176,18 @@ Seçili pasaja ve yakın bağlama göre öğretici cevap ver. Gerekirse bir benz
       const result = await callMimo(messages, {
         json: false,
         temperature: 0.35,
-        maxTokens: 1000,
+        // Vision explain + mini table; ~1.5k is enough without essay bloat
+        maxTokens: 1536,
       })
       answer = result.text
       usage = result.usage
       provider = 'mimo'
     } else {
-      // Lecture interrupt: smaller history + tighter maxTokens → faster completion
+      // Ask budgets (reasoning off): lecture TTS ~120–200 words → ~1k ceiling;
+      // PDF/notes answers with table/benzetme → ~1.5k. 480 was a legacy “speed”
+      // cap that truncated pedagogy and broke Ling when thinking ate the budget.
       const histN = lectureMode ? 4 : 8
-      const maxTokens = lectureMode ? 480 : 900
+      const maxTokens = lectureMode ? 1024 : 1536
       const temperature = lectureMode ? 0.35 : 0.4
       const messages = [
         { role: 'system' as const, content: system },

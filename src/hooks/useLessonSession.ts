@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MindMapData } from '@/types/database'
+import { friendlyEmaError } from '@/lib/errors'
 import { buildLessonSteps } from '@/lib/mindmapLesson/buildTimeline'
 import { synthesizeLessonTimeline } from '@/lib/mindmapLesson/lessonTts'
 import {
@@ -7,6 +8,7 @@ import {
   type LessonPlayerApi,
   type LessonPlayerState,
 } from '@/lib/mindmapLesson/player'
+import { hashLessonScriptKey } from '@/lib/mindmapLesson/wavCache'
 import type { LessonTimeline } from '@/lib/mindmapLesson/types'
 
 export type LessonPhase =
@@ -24,6 +26,7 @@ export function useLessonSession(input: {
   data: MindMapData
   markdown?: string | null
   title?: string
+  chapterId?: string
 }) {
   const steps = useMemo(
     () =>
@@ -33,6 +36,15 @@ export function useLessonSession(input: {
       }),
     [input.data, input.markdown, input.title],
   )
+
+  const wavCacheKey = useMemo(() => {
+    if (!input.chapterId || !steps.length) return null
+    return hashLessonScriptKey(
+      input.chapterId,
+      steps.map((s) => s.text),
+      1,
+    )
+  }, [input.chapterId, steps])
 
   const [phase, setPhase] = useState<LessonPhase>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -88,6 +100,7 @@ export function useLessonSession(input: {
     let lastWord = -2
     let lastPlaying: boolean | null = null
     let lastBuffering: boolean | null = null
+    let lastBufferingLong: boolean | null = null
     let lastDone = false
     let lastClockMs = 0
     api.subscribe((s) => {
@@ -97,6 +110,7 @@ export function useLessonSession(input: {
       const playChanged =
         s.playing !== lastPlaying ||
         s.buffering !== lastBuffering ||
+        s.bufferingLong !== lastBufferingLong ||
         s.done !== lastDone
       // Avoid re-rendering MindMapPanel on every clock tick — only on
       // meaningful karaoke/focus changes, plus a slow clock for the strip.
@@ -109,6 +123,7 @@ export function useLessonSession(input: {
       lastWord = s.wordIndex
       lastPlaying = s.playing
       lastBuffering = s.buffering
+      lastBufferingLong = s.bufferingLong
       lastDone = s.done
       if (clockDue) lastClockMs = now
       setPlayerState(s)
@@ -118,7 +133,11 @@ export function useLessonSession(input: {
         else if (s.buffering) {
           // Stay in lesson flow — EMA is catching up on the next node
           setPhase('playing')
-          setProgressLabel('Sonraki düğümün sesi hazırlanıyor…')
+          setProgressLabel(
+            s.bufferingLong
+              ? 'Ses hâlâ hazırlanıyor — biraz daha bekle…'
+              : 'Sonraki düğümün sesi hazırlanıyor…',
+          )
         } else if (s.playing) setPhase('playing')
         else if (s.currentTime > 0.05) setPhase('paused')
       }
@@ -146,7 +165,9 @@ export function useLessonSession(input: {
 
   const start = useCallback(async () => {
     if (!steps.length) {
-      setError('Ders adımları oluşturulamadı')
+      setError(
+        'Bu haritadan ders adımı çıkmadı. Haritayı yenileyip tekrar dene.',
+      )
       setPhase('error')
       return
     }
@@ -177,6 +198,7 @@ export function useLessonSession(input: {
       const tl = await synthesizeLessonTimeline(steps, {
         signal: ac.signal,
         lookahead: 4,
+        cacheKey: wavCacheKey,
         getPlayheadIndex: () =>
           playerRef.current?.getPlayheadIndex() ?? 0,
         shouldPause: () => askingRef.current,
@@ -246,8 +268,13 @@ export function useLessonSession(input: {
         await player.seekSegment(0)
         await player.play()
         if (!askingRef.current) setPhase('playing')
-      } else if (!player.getState().playing && !askingRef.current) {
-        setPhase('ready')
+      } else if (
+        !player.getState().playing &&
+        !player.getState().buffering &&
+        !askingRef.current
+      ) {
+        // Synth finished while audio was between segments — stay ready
+        setPhase((prev) => (prev === 'playing' || prev === 'asking' ? prev : 'ready'))
       }
     } catch (err) {
       if (runId !== runIdRef.current) return
@@ -255,14 +282,25 @@ export function useLessonSession(input: {
         return
       }
       console.error('[lesson]', err)
+      // Partial lesson is better than a hard stop mid-tour
+      const apiCatch = playerRef.current
+      const partial = apiCatch?.getTimelineSnapshot()
+      if (apiCatch && partial?.segments.length) {
+        apiCatch.setTimeline(partial, { markDone: true })
+        setTimeline(partial)
+        setProgressLabel('Kısmi ders hazır — bazı düğümler atlandı')
+        if (!startedPlayRef.current) {
+          startedPlayRef.current = true
+          await apiCatch.seekSegment(0)
+          await apiCatch.play()
+        }
+        if (!askingRef.current) setPhase('playing')
+        return
+      }
       setPhase('error')
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Ses modeli yüklenemedi, tekrar deneyin',
-      )
+      setError(friendlyEmaError(err))
     }
-  }, [ensurePlayer, steps])
+  }, [ensurePlayer, steps, wavCacheKey])
 
   const pauseForAsk = useCallback(() => {
     const api = playerRef.current

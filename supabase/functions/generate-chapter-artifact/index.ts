@@ -22,19 +22,15 @@ import {
   fixedSourceFingerprint,
   taskBrief,
   taskDetailedOneShot,
-  taskMindMapOneShot,
   taskPractice,
 } from '../_shared/cacheableChapter.ts'
 import {
-  buildMindMapFromPdf,
-  buildOutlineMindMap,
+  buildTwoStageMindMap,
   enrichMindMapCoverage,
-  extractPdfTocCandidates,
-  mindMapFallback,
   parseMindMap,
-  pickBetterMindMap,
   type MindMap,
   type PageSource,
+  weakMindMapLabelRatio,
 } from '../_shared/mindMapGen.ts'
 import {
   scoreMindMap,
@@ -428,63 +424,22 @@ serve(async (req) => {
       })
     }
 
-    // ——— mind_map: PDF-first; else ONE LLM call (tiny GÖREV → max Cache Hit %) ———
-    const pdfMap = buildMindMapFromPdf(title, pageText, pageSources)
-    const pdfCands = extractPdfTocCandidates(pageText)
-    const notesOutline = buildOutlineMindMap(
+    // ——— mind_map: Aşama1 iskelet (PDF/notes → LLM skel) → Aşama2 fill ———
+    const { map: built, meta: mmMeta } = await buildTwoStageMindMap({
       title,
-      String(row.explanation_detailed || explanation || ''),
+      pageText,
       pageSources,
-    )
-
-    const pdfStrong =
-      !!pdfMap &&
-      pdfMap.branches.length >= 5 &&
-      pdfMap.branches.filter((b) => (b.children?.length ?? 0) >= 2).length >=
-        3 &&
-      pdfCands.length >= 10
-
-    let mindMap: MindMap | null = pdfMap
-    let quality: QualityReport = scoreMindMap(pdfMap, atlasPages)
-
-    if (!pdfStrong) {
-      try {
-        const one = await askTask(
-          fixedSource,
-          taskMindMapOneShot(),
-          3200,
-          usageBag,
-        )
-        const fromOne = parseMindMap(one.mind_map ?? one, title)
-        mindMap =
-          pickBetterMindMap(pdfMap, fromOne) ||
-          fromOne ||
-          pdfMap ||
-          notesOutline
-      } catch (err) {
-        console.warn('mind_map one-shot failed', err)
-        mindMap = pdfMap || notesOutline
-      }
-    }
-
-    if (!mindMap) mindMap = mindMapFallback(title, keyConcepts)
-    mindMap = scrubMindMapLabels(mindMap)
+      notesMarkdown: String(row.explanation_detailed || explanation || ''),
+      concepts: keyConcepts,
+      askJson: (task) => askTask(fixedSource, task, 3200, usageBag),
+    })
+    let mindMap = scrubMindMapLabels(built)
     mindMap = enrichMindMapCoverage(
       mindMap,
       pageSources,
       atlasPages.length ? atlasPages : [],
     )
-    quality = scoreMindMap(mindMap, atlasPages)
-
-    if (!quality.ok && pdfMap) {
-      const pdfQ = scoreMindMap(pdfMap, atlasPages)
-      if (pdfQ.score >= quality.score) {
-        mindMap = scrubMindMapLabels(
-          enrichMindMapCoverage(pdfMap, pageSources, atlasPages),
-        )
-        quality = scoreMindMap(mindMap, atlasPages)
-      }
-    }
+    const quality: QualityReport = scoreMindMap(mindMap, atlasPages)
 
     const { error } = await admin
       .from('chapters')
@@ -492,12 +447,13 @@ serve(async (req) => {
       .eq('id', chapterId)
     if (error) throw new Error(error.message)
 
-    await flushUsage({ kind, pdf_strong: pdfStrong })
+    await flushUsage({ kind, ...mmMeta })
     return okResponse(kind, chapterId, {
       cached: false,
       cacheable: true,
       quality,
-      weak: !quality.ok,
+      weak: !quality.ok || weakMindMapLabelRatio(mindMap) > 0.25,
+      mind_map_meta: mmMeta,
       usage: usagePayload(),
     })
   } catch (err) {

@@ -37,6 +37,7 @@ import {
 import StudyMarkdown from '@/components/StudyMarkdown'
 import LessonAskPanel from '@/components/LessonAskPanel'
 import LessonPlayer from '@/components/LessonPlayer'
+import LessonWaitMood from '@/components/LessonWaitMood'
 import LessonSpeechBubble from '@/components/LessonSpeechBubble'
 import {
   fitLessonFrame,
@@ -71,6 +72,8 @@ type Props = {
    * lesson = cinematic DFS tour + EMA (Dinle tab)
    */
   variant?: 'studio' | 'lesson'
+  /** True when AI map-locked lesson script is ready (Dinle ready state) */
+  lessonScriptReady?: boolean
 }
 
 const BRANCH_COLORS_FALLBACK = [
@@ -405,6 +408,7 @@ export default function MindMapPanel({
   onRefreshMap,
   refreshingMap = false,
   variant = 'studio',
+  lessonScriptReady = false,
 }: Props) {
   const lessonMode = variant === 'lesson'
   const branches = useMemo(
@@ -441,7 +445,7 @@ export default function MindMapPanel({
   const coarse = useCoarsePointer()
   const branchColors = useMemo(() => readBranchColors(), [data.central, data.branches])
 
-  const lesson = useLessonSession({ data, markdown, title })
+  const lesson = useLessonSession({ data, markdown, title, chapterId })
   const lessonAsking = lessonMode && lesson.phase === 'asking'
   const lessonActive = Boolean(
     lessonMode &&
@@ -1129,16 +1133,24 @@ export default function MindMapPanel({
         <div className="mind-map-detail__actions">
           {isTtsSupported() ? (
             speaking ? (
-              <button
-                type="button"
-                className="btn-ghost text-xs"
-                onClick={() => {
-                  stopSpeech()
-                  setSpeaking(false)
-                }}
-              >
-                Durdur
-              </button>
+              <>
+                <LessonWaitMood
+                  kind="speaking"
+                  size="compact"
+                  className="mind-map-detail__wait"
+                  title="Konu okunuyor"
+                />
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => {
+                    stopSpeech()
+                    setSpeaking(false)
+                  }}
+                >
+                  Durdur
+                </button>
+              </>
             ) : (
               <button
                 type="button"
@@ -1324,6 +1336,18 @@ export default function MindMapPanel({
             {detail && !coarse && !lessonActive ? (
               <div className="mind-map-stage__detail">{detailCard}</div>
             ) : null}
+            {lessonMode &&
+            (lesson.phase === 'loading_model' ||
+              lesson.phase === 'synthesizing') &&
+            !(lesson.playerState?.playing) ? (
+              <div className="mind-map-stage__wait" aria-hidden={false}>
+                <LessonWaitMood
+                  kind="audio"
+                  size="stage"
+                  detail={lesson.progressLabel || null}
+                />
+              </div>
+            ) : null}
             {lessonMode && chapterId ? (
               <LessonAskPanel
                 open={lessonAsking}
@@ -1353,6 +1377,9 @@ export default function MindMapPanel({
               rate={lesson.playerState?.rate ?? 1}
               followCamera={lesson.followCamera}
               captionOnMap={showSpeechBubble && !lessonAsking}
+              buffering={Boolean(lesson.playerState?.buffering)}
+              bufferingLong={Boolean(lesson.playerState?.bufferingLong)}
+              scriptReady={lessonScriptReady}
               canAsk={Boolean(chapterId) && Boolean(askContext)}
               onAsk={() => {
                 stopSpeech()

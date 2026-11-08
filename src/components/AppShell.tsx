@@ -71,7 +71,20 @@ export default function AppShell({
             <div className="app-topbar__study">{studyContext}</div>
           ) : null}
         </div>
-        <nav className="flex flex-wrap items-center gap-0.5">
+        <nav className="flex flex-wrap items-center gap-0.5" aria-label="Ana">
+          {!studyChrome ? (
+            <>
+              <Link to="/" className="btn-ghost text-xs">
+                Yükle
+              </Link>
+              <Link to="/library" className="btn-ghost text-xs">
+                Kitaplığım
+              </Link>
+              <Link to="/tools" className="btn-ghost text-xs">
+                Araçlar
+              </Link>
+            </>
+          ) : null}
           <StudyTimerBadge bookId={bookId} showBook={showBookTimer} />
           <ThemePicker />
           <NotificationBell />
@@ -87,11 +100,11 @@ export default function AppShell({
               {menuOpen && (
                 <div className="surface-panel absolute right-0 z-50 mt-2 w-44 space-y-0.5 p-1.5">
                   <Link
-                    to="/"
+                    to="/library"
                     className="block rounded-lg px-2.5 py-2 text-xs"
                     onClick={() => setMenuOpen(false)}
                   >
-                    Kitaplık
+                    Kitaplığım
                   </Link>
                   <Link
                     to="/notes"

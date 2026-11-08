@@ -56,7 +56,7 @@ export default function SharedChapterPage() {
   const [depth, setDepth] = useState<Depth>('standard')
   const [contributeOpen, setContributeOpen] = useState(false)
   const [flashOpen, setFlashOpen] = useState(false)
-  const [readStudio, setReadStudio] = useState<ReadStudioTab | null>(null)
+  const [readStudio, setReadStudio] = useState<ReadStudioTab>('prose')
 
   const bookQuery = useQuery({
     queryKey: ['public-book', token],
@@ -219,16 +219,59 @@ export default function SharedChapterPage() {
     )
   }
 
-  if (!bookQuery.data || !ch) {
+  if (bookQuery.isError || !bookQuery.data) {
     return (
       <AppShell>
         <div className="surface-panel mx-auto max-w-lg p-8 text-center">
           <h1 className="font-display text-2xl font-semibold">
-            İçerik bulunamadı
+            Link geçersiz veya kapalı
           </h1>
-          <Link to={token ? `/s/${token}` : '/'} className="btn-primary mt-6 inline-flex">
-            Geri dön
-          </Link>
+          <p className="muted mt-2 text-sm">
+            Bu çalışma artık paylaşılmıyor olabilir. Linki kontrol edip tekrar
+            dene.
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => void bookQuery.refetch()}
+            >
+              Tekrar dene
+            </button>
+            <Link to="/" className="btn-primary inline-flex">
+              Studium’a git
+            </Link>
+          </div>
+        </div>
+      </AppShell>
+    )
+  }
+
+  if (chapterQuery.isError || !ch) {
+    return (
+      <AppShell>
+        <div className="surface-panel mx-auto max-w-lg p-8 text-center">
+          <h1 className="font-display text-2xl font-semibold">
+            Ünite bulunamadı
+          </h1>
+          <p className="muted mt-2 text-sm">
+            Bu ünite silinmiş veya linke dahil değil olabilir.
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => void chapterQuery.refetch()}
+            >
+              Tekrar dene
+            </button>
+            <Link
+              to={token ? `/s/${token}` : '/'}
+              className="btn-primary inline-flex"
+            >
+              Kitaba dön
+            </Link>
+          </div>
         </div>
       </AppShell>
     )
@@ -277,8 +320,9 @@ export default function SharedChapterPage() {
 
       <StudyRightStudio
         showStudio={mode === 'read'}
-        active={readStudio}
-        onChange={setReadStudio}
+        showHub={false}
+        active={readStudio === 'hub' ? 'prose' : readStudio}
+        onChange={(tab) => setReadStudio(tab === 'hub' ? 'prose' : tab)}
         hasMap={!!mindMap}
         tools={[
           {
@@ -337,7 +381,7 @@ export default function SharedChapterPage() {
                 aria-selected={mode === m.id}
                 onClick={() => {
                   setMode(m.id)
-                  if (m.id !== 'read') setReadStudio(null)
+                  if (m.id === 'read') setReadStudio('prose')
                   if (m.id === 'practice') {
                     setPracticePanel('quiz')
                     setFlashOpen(false)
@@ -428,7 +472,7 @@ export default function SharedChapterPage() {
                 quiz={ch.quiz}
                 defaultOpen
                 onOpenQuiz={() => {
-                  setReadStudio(null)
+                  setReadStudio('prose')
                   setMode('practice')
                   setPracticePanel('quiz')
                   setFlashOpen(false)
@@ -437,19 +481,51 @@ export default function SharedChapterPage() {
             </section>
           ) : null}
 
-          {readStudio === 'audio' && mindMap ? (
-            <ListenLessonStudio
-              chapterId={ch.id}
-              title={ch.title}
-              summary={ch.summary}
-              keyConcepts={ch.key_concepts}
-              markdown={markdown}
-              mindMap={mindMap}
-            />
+          {readStudio === 'audio' ? (
+            mindMap ? (
+              <ListenLessonStudio
+                chapterId={ch.id}
+                title={ch.title}
+                summary={ch.summary}
+                keyConcepts={ch.key_concepts}
+                markdown={markdown}
+                mindMap={mindMap}
+              />
+            ) : (
+              <div className="listen-workspace-empty" role="status">
+                <p className="section-label mb-0">Dinle</p>
+                <h2 className="listen-workspace-empty__title">
+                  Harita henüz hazır değil
+                </h2>
+                <p className="listen-workspace-empty__lead">
+                  Bu ünite için zihin haritası yok. Harita üretildikten sonra
+                  hoca turunu dinleyebilirsin.
+                </p>
+              </div>
+            )
           ) : null}
 
-          {readStudio === null ? (
+          {readStudio === 'prose' ? (
             <section className="chapter-prose">
+              {mindMap ? (
+                <div className="lesson-hero-cta" role="region" aria-label="Dersi dinle">
+                  <div className="lesson-hero-cta__copy">
+                    <p className="lesson-hero-cta__eyebrow">En güçlü deneyim</p>
+                    <p className="lesson-hero-cta__title">Dersi dinle</p>
+                    <p className="lesson-hero-cta__lead">
+                      Hoca zihin haritasında düğüm düğüm anlatır — kamera,
+                      karaoke, soru sor.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-primary lesson-hero-cta__btn"
+                    onClick={() => setReadStudio('audio')}
+                  >
+                    Dersi dinle
+                  </button>
+                </div>
+              ) : null}
               {markdown ? (
                 <Suspense
                   fallback={

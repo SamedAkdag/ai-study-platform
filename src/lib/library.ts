@@ -169,6 +169,11 @@ export function libraryHref(item: {
   return `/books/${item.bookId}/read`
 }
 
+/** Study desk after upload / from book hub. */
+export function studyDeskHref(bookId: string) {
+  return `/study/${bookId}`
+}
+
 export async function fetchMyLibrary(userId?: string | null): Promise<LibraryItem[]> {
   const byId = new Map<string, LibraryItem>()
 

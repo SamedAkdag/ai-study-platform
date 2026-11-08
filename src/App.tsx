@@ -8,6 +8,9 @@ const ProcessingPage = lazy(() => import('@/pages/ProcessingPage'))
 const BookPage = lazy(() => import('@/pages/BookPage'))
 const BookReadPage = lazy(() => import('@/pages/BookReadPage'))
 const ChapterPage = lazy(() => import('@/pages/ChapterPage'))
+const StudyDeskPage = lazy(() => import('@/pages/StudyDeskPage'))
+const LibraryPage = lazy(() => import('@/pages/LibraryPage'))
+const ToolsPage = lazy(() => import('@/pages/ToolsPage'))
 const SharedBookPage = lazy(() => import('@/pages/SharedBookPage'))
 const SharedChapterPage = lazy(() => import('@/pages/SharedChapterPage'))
 const JoinInvitePage = lazy(() => import('@/pages/JoinInvitePage'))
@@ -34,11 +37,18 @@ export default function App() {
           <Suspense fallback={<RouteFallback />}>
             <Routes>
               <Route path="/" element={<UploadPage />} />
+              <Route path="/library" element={<LibraryPage />} />
+              <Route path="/tools" element={<ToolsPage />} />
+              <Route path="/study/:bookId" element={<StudyDeskPage />} />
               <Route path="/notes" element={<NotesPage />} />
               <Route path="/review" element={<ReviewPage />} />
               <Route path="/processing/:bookId" element={<ProcessingPage />} />
               <Route path="/books/:bookId" element={<BookPage />} />
               <Route path="/books/:bookId/read" element={<BookReadPage />} />
+              <Route
+                path="/reader/:bookId"
+                element={<BookReadPage />}
+              />
               <Route
                 path="/books/:bookId/chapters/:chapterId"
                 element={<ChapterPage />}

@@ -1,4 +1,5 @@
 import { useRef } from 'react'
+import LessonWaitMood from '@/components/LessonWaitMood'
 import type { LessonPhase } from '@/hooks/useLessonSession'
 import type { LessonTimeline } from '@/lib/mindmapLesson/types'
 
@@ -26,9 +27,14 @@ type Props = {
   exportLabel?: string
   /** Karaoke lives on the map bubble — strip stays controls-only */
   captionOnMap?: boolean
+  /** Waiting on next EMA segment between nodes */
+  buffering?: boolean
+  bufferingLong?: boolean
   canAsk?: boolean
   onAsk?: () => void
   onResumeAsk?: () => void
+  /** AI map-locked script ready — stronger idle CTA */
+  scriptReady?: boolean
 }
 
 const RATES = [0.75, 1, 1.25, 1.5] as const
@@ -63,13 +69,17 @@ export default function LessonPlayer({
   exportBusy = false,
   exportLabel = '',
   captionOnMap = false,
+  buffering = false,
+  bufferingLong = false,
   canAsk = false,
   onAsk,
   onResumeAsk,
+  scriptReady = false,
 }: Props) {
   const touchRef = useRef<{ x: number; y: number } | null>(null)
   const busy = phase === 'loading_model' || phase === 'synthesizing'
   const asking = phase === 'asking'
+  const catchingUp = buffering && !busy && !asking
   const active =
     phase === 'playing' ||
     phase === 'paused' ||
@@ -118,26 +128,39 @@ export default function LessonPlayer({
       }}
     >
       {!active ? (
-        <button type="button" className="lesson-strip__start" onClick={onStart}>
+        <button
+          type="button"
+          className={`lesson-strip__start${
+            scriptReady ? ' lesson-strip__start--ready' : ''
+          }`}
+          onClick={onStart}
+        >
           Dersi Başlat
           <span className="lesson-strip__start-hint">
-            Sinematik harita turu · düğüm yanında anlatım
+            {scriptReady
+              ? 'Ders metni hazır · düğüm düğüm hoca turu'
+              : 'Sinematik harita turu · düğüm yanında anlatım'}
           </span>
         </button>
       ) : (
         <>
           {busy ? (
             <div className="lesson-strip__load" role="status">
+              <LessonWaitMood
+                kind="audio"
+                size="compact"
+                detail={
+                  progressPct > 0
+                    ? `${progressLabel || 'Hazırlanıyor…'} · %${progressPct}`
+                    : progressLabel || null
+                }
+              />
               <div className="lesson-strip__bar">
                 <div
                   className="lesson-strip__bar-fill"
                   style={{ width: `${Math.max(4, progressPct)}%` }}
                 />
               </div>
-              <span className="lesson-strip__load-label">
-                {progressLabel || 'Hazırlanıyor…'}
-                {progressPct > 0 ? ` · %${progressPct}` : ''}
-              </span>
             </div>
           ) : null}
 
@@ -163,6 +186,21 @@ export default function LessonPlayer({
                 </button>
               ) : null}
             </p>
+          ) : null}
+
+          {catchingUp ? (
+            <LessonWaitMood
+              kind="buffer"
+              size="compact"
+              className={
+                bufferingLong ? 'lesson-strip__buffer-mood--long' : undefined
+              }
+              detail={
+                bufferingLong
+                  ? 'Biraz daha bekleyebilir — ses modeli yavaşladı'
+                  : null
+              }
+            />
           ) : null}
 
           {!busy && nowTitle && !captionOnMap && !asking ? (

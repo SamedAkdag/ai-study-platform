@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { disableBookShare, enableBookShare } from '@/lib/api'
 import GroupSharePanel from '@/components/GroupSharePanel'
+import { friendlyAiError } from '@/lib/errors'
 import type { Book } from '@/types/database'
 
 type Props = {
@@ -25,9 +26,8 @@ export default function ShareBookButton({ book }: Props) {
     },
     onError: (err) => {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'Paylaşım açılamadı. SQL migration çalıştırıldı mı?',
+        friendlyAiError(err) ||
+          'Paylaşım açılamadı. Bağlantını kontrol edip tekrar dene.',
       )
     },
   })
@@ -40,7 +40,7 @@ export default function ShareBookButton({ book }: Props) {
       await queryClient.invalidateQueries({ queryKey: ['book', book.id] })
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'Paylaşım kapatılamadı')
+      setError(friendlyAiError(err) || 'Paylaşım kapatılamadı')
     },
   })
 
@@ -108,7 +108,23 @@ export default function ShareBookButton({ book }: Props) {
           <GroupSharePanel bookId={book.id} shareToken={book.share_token} />
         </>
       )}
-      {error && <div className="alert-error text-sm">{error}</div>}
+      {error ? (
+        <div className="alert-error flex flex-wrap items-center gap-2 text-sm">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={busy}
+            onClick={() => {
+              setError(null)
+              if (isPublic) disableMutation.mutate()
+              else enableMutation.mutate()
+            }}
+          >
+            Tekrar dene
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }

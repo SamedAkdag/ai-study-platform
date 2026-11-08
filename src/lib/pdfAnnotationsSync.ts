@@ -87,16 +87,24 @@ export async function removePdfAnnotationRemote(
   }
 }
 
+export type PdfAnnotationPullResult = {
+  annotations: PdfAnnotation[]
+  /** True when cloud pull failed; local cache is still returned. */
+  syncFailed?: boolean
+  message?: string
+}
+
 /**
- * Merge remote annotations into local cache (by id). Returns merged list.
+ * Merge remote annotations into local cache (by id). Always returns a list
+ * (falls back to local); check `syncFailed` when UI should warn.
  */
-export async function pullPdfAnnotations(
+export async function pullPdfAnnotationsWithMeta(
   bookId: string,
-): Promise<PdfAnnotation[]> {
+): Promise<PdfAnnotationPullResult> {
   const local = loadPdfAnnotations(bookId)
   try {
     const userId = await currentUserId()
-    if (!userId) return local
+    if (!userId) return { annotations: local }
 
     const { data, error } = await supabase
       .from('pdf_annotations')
@@ -106,15 +114,23 @@ export async function pullPdfAnnotations(
       .order('created_at', { ascending: false })
       .limit(400)
 
-    if (error || !data?.length) {
-      if (error) console.warn('pdf_annotations pull failed', error)
+    if (error) {
+      console.warn('pdf_annotations pull failed', error)
+      return {
+        annotations: local,
+        syncFailed: true,
+        message: error.message || 'Not senkronu başarısız',
+      }
+    }
+
+    if (!data?.length) {
       // Push local-only items up once signed in
-      if (!error && local.length) {
+      if (local.length) {
         for (const item of local.slice(0, 80)) {
           void pushPdfAnnotation(item)
         }
       }
-      return local
+      return { annotations: local }
     }
 
     const byId = new Map<string, PdfAnnotation>()
@@ -142,8 +158,22 @@ export async function pullPdfAnnotations(
       if (!remoteIds.has(item.id)) void pushPdfAnnotation(item)
     }
 
-    return merged
-  } catch {
-    return local
+    return { annotations: merged }
+  } catch (err) {
+    console.warn('pdf_annotations pull failed', err)
+    return {
+      annotations: local,
+      syncFailed: true,
+      message:
+        err instanceof Error ? err.message : 'Not senkronu başarısız',
+    }
   }
+}
+
+/** Merge remote annotations into local cache (by id). Returns merged list. */
+export async function pullPdfAnnotations(
+  bookId: string,
+): Promise<PdfAnnotation[]> {
+  const result = await pullPdfAnnotationsWithMeta(bookId)
+  return result.annotations
 }

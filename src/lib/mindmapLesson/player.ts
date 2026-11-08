@@ -10,6 +10,8 @@ export type LessonPlayerState = {
   playing: boolean
   /** Waiting for the next EMA segment to finish synthesizing */
   buffering: boolean
+  /** Buffering longer than ~20s — UI can warn without aborting */
+  bufferingLong: boolean
   currentTime: number
   segmentIndex: number
   wordIndex: number
@@ -18,6 +20,8 @@ export type LessonPlayerState = {
   rate: number
   done: boolean
 }
+
+const BUFFER_LONG_MS = 18_000
 
 /**
  * Sequential HTMLAudio segment player with a single rAF clock.
@@ -30,6 +34,8 @@ export function createLessonPlayer() {
   let segIndex = 0
   let playing = false
   let buffering = false
+  let bufferingLong = false
+  let bufferStartedAt = 0
   let raf = 0
   let objectUrl: string | null = null
   let baseOffset = 0
@@ -65,6 +71,7 @@ export function createLessonPlayer() {
     return {
       playing,
       buffering,
+      bufferingLong,
       currentTime: t,
       segmentIndex: useSi,
       wordIndex: wi,
@@ -73,6 +80,12 @@ export function createLessonPlayer() {
       rate,
       done: atEnd,
     }
+  }
+
+  function clearBufferFlags() {
+    buffering = false
+    bufferingLong = false
+    bufferStartedAt = 0
   }
 
   function emit() {
@@ -139,7 +152,7 @@ export function createLessonPlayer() {
   audio.onended = () => {
     const next = segIndex + 1
     if (next < segments.length) {
-      buffering = false
+      clearBufferFlags()
       void loadSegment(next, true)
       return
     }
@@ -147,23 +160,36 @@ export function createLessonPlayer() {
       // Next node audio still synthesizing — stay in lesson, poll quickly
       playing = false
       buffering = true
+      bufferingLong = false
+      bufferStartedAt = performance.now()
       emit()
       clearWait()
       waitTimer = window.setInterval(() => {
         if (segIndex + 1 < segments.length) {
           clearWait()
-          buffering = false
+          clearBufferFlags()
           void loadSegment(segIndex + 1, true)
-        } else if (synthDone) {
+          return
+        }
+        if (synthDone) {
           clearWait()
-          buffering = false
+          clearBufferFlags()
           playing = false
+          emit()
+          return
+        }
+        if (
+          !bufferingLong &&
+          bufferStartedAt &&
+          performance.now() - bufferStartedAt >= BUFFER_LONG_MS
+        ) {
+          bufferingLong = true
           emit()
         }
       }, 60)
       return
     }
-    buffering = false
+    clearBufferFlags()
     playing = false
     emit()
   }
@@ -231,7 +257,7 @@ export function createLessonPlayer() {
     },
     pause() {
       playing = false
-      buffering = false
+      clearBufferFlags()
       clearWait()
       audio.pause()
       cancelAnimationFrame(raf)
@@ -269,7 +295,7 @@ export function createLessonPlayer() {
     },
     destroy() {
       playing = false
-      buffering = false
+      clearBufferFlags()
       audio.pause()
       cancelAnimationFrame(raf)
       clearWait()

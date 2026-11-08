@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ensureChapterArtifact,
@@ -32,11 +32,16 @@ import PdfViewer, {
   type PdfSelectionAction,
   type PdfSelectionPayload,
 } from '@/components/PdfViewer'
-import PdfAiPanel from '@/components/PdfAiPanel'
+import PdfStudyAssistRail from '@/components/PdfStudyAssistRail'
+import { speakPdfText, stopPdfSpeak } from '@/lib/pdfSpeak'
 import CiteDraftPanel from '@/components/CiteDraftPanel'
 import FlashcardStories from '@/components/FlashcardStories'
 import StudyGuidePanel from '@/components/StudyGuidePanel'
 import ListenLessonStudio from '@/components/ListenLessonStudio'
+import ReadStudioLobby from '@/components/ReadStudioLobby'
+import PracticeLobby from '@/components/PracticeLobby'
+import StudioBackBar from '@/components/StudioBackBar'
+import LessonWaitMood from '@/components/LessonWaitMood'
 import AiUsagePanel from '@/components/AiUsagePanel'
 import StudySplitPane from '@/components/StudySplitPane'
 import {
@@ -47,7 +52,7 @@ import {
   type PdfAnnotation,
 } from '@/lib/pdfAnnotations'
 import {
-  downloadMarkdownAsPdf,
+  downloadMarkdownFile,
   downloadNotesPdf,
   exportableNotes,
 } from '@/lib/exportNotesPdf'
@@ -74,14 +79,25 @@ import {
 /** Source-first study IA: PDF work surface, then AI notes, then drills. */
 type StudyMode = 'read' | 'practice' | 'source'
 type Depth = 'brief' | 'standard' | 'detailed'
-type PracticePanel = 'flash' | 'quiz' | 'examples'
+type PracticePanel = 'hub' | 'flash' | 'quiz' | 'examples'
 
 export default function ChapterPage() {
   const { bookId, chapterId } = useParams<{ bookId: string; chapterId: string }>()
+  const [searchParams] = useSearchParams()
   useStudySession(bookId, chapterId)
-  const [mode, setMode] = useState<StudyMode>('source')
+  const [mode, setMode] = useState<StudyMode>(() => {
+    const m = searchParams.get('mode')
+    if (m === 'practice' || m === 'read' || m === 'source') return m
+    if (searchParams.get('studio') === 'map' || searchParams.get('studio') === 'audio')
+      return 'read'
+    return 'source'
+  })
   const [depth, setDepth] = useState<Depth>('standard')
-  const [practicePanel, setPracticePanel] = useState<PracticePanel>('quiz')
+  const [practicePanel, setPracticePanel] = useState<PracticePanel>(() => {
+    const p = searchParams.get('panel')
+    if (p === 'flash' || p === 'quiz' || p === 'examples') return p
+    return 'hub'
+  })
   const [practiceDifficulty, setPracticeDifficulty] =
     useState<PracticeDifficulty>('medium')
   const [extraQuiz, setExtraQuiz] = useState<QuizItem[]>([])
@@ -94,22 +110,43 @@ export default function ChapterPage() {
   const [mobilePane, setMobilePane] = useState<'pdf' | 'notes'>('pdf')
   const [pdfFocusPage, setPdfFocusPage] = useState<number | null>(null)
   const [pdfSel, setPdfSel] = useState<PdfSelectionPayload | null>(null)
-  const [pdfMode, setPdfMode] = useState<'ask' | 'summarize' | 'explain' | null>(
-    null,
-  )
+  const [pdfMode, setPdfMode] = useState<
+    'ask' | 'summarize' | 'explain' | 'translate' | null
+  >(null)
+  const [pdfSeedQuestion, setPdfSeedQuestion] = useState<string | null>(null)
   const [draftCite, setDraftCite] = useState<PdfSelectionPayload | null>(null)
   const [draftNote, setDraftNote] = useState<PdfSelectionPayload | null>(null)
   const [noteBody, setNoteBody] = useState('')
   const [citeToast, setCiteToast] = useState<string | null>(null)
   const [pdfNotes, setPdfNotes] = useState<PdfAnnotation[]>([])
-  const [flashOpen, setFlashOpen] = useState(false)
+  const [flashOpen, setFlashOpen] = useState(
+    () => searchParams.get('panel') === 'flash',
+  )
   const [edgeSettingsOpen, setEdgeSettingsOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const [contributeOpen, setContributeOpen] = useState(false)
   const [togetherOpen, setTogetherOpen] = useState(false)
-  const [readStudio, setReadStudio] = useState<ReadStudioTab | null>(null)
+  const [readStudio, setReadStudio] = useState<ReadStudioTab>(() => {
+    const s = searchParams.get('studio')
+    if (s === 'map' || s === 'audio' || s === 'guide' || s === 'prose') return s
+    return 'hub'
+  })
   const autoRetryRef = useRef(0)
   const queryClient = useQueryClient()
+
+  useEffect(() => {
+    const m = searchParams.get('mode')
+    if (m === 'practice' || m === 'read' || m === 'source') setMode(m)
+    const p = searchParams.get('panel')
+    if (p === 'flash' || p === 'quiz' || p === 'examples') setPracticePanel(p)
+    const s = searchParams.get('studio')
+    if (s === 'map' || s === 'audio' || s === 'guide' || s === 'prose') {
+      setMode('read')
+      setReadStudio(s)
+    }
+    if (p === 'flash') setFlashOpen(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   useEffect(() => {
     if (!bookId) {
@@ -118,7 +155,13 @@ export default function ChapterPage() {
     }
     setPdfNotes(loadPdfAnnotations(bookId))
     void import('@/lib/pdfAnnotationsSync').then((m) =>
-      m.pullPdfAnnotations(bookId).then((merged) => setPdfNotes(merged)),
+      m.pullPdfAnnotationsWithMeta(bookId).then((result) => {
+        setPdfNotes(result.annotations)
+        if (result.syncFailed) {
+          setCiteToast('Notlar buluta senkronlanamadı — yerelde duruyor')
+          window.setTimeout(() => setCiteToast(null), 2800)
+        }
+      }),
     )
     void import('@/lib/chapterProgressSync').then((m) =>
       m.pullChapterProgressForBook(bookId),
@@ -348,6 +391,18 @@ export default function ChapterPage() {
     return ch.explanation || ''
   }, [ch, depth])
 
+  const depthExactMissing =
+    depth === 'brief'
+      ? !String(ch?.explanation_brief || '').trim()
+      : depth === 'detailed'
+        ? !String(ch?.explanation_detailed || '').trim()
+        : false
+  const depthShowingFallback =
+    depthExactMissing && Boolean(String(ch?.explanation || '').trim())
+  const depthArtifactKind: ChapterArtifactKind | null =
+    depth === 'brief' ? 'brief' : depth === 'detailed' ? 'detailed' : null
+
+  const hasAiMindMap = Boolean(ch?.mind_map?.branches?.length)
   const mindMap = useMemo(() => {
     if (!ch) return null
     if (ch.mind_map?.branches?.length) return ch.mind_map
@@ -467,12 +522,40 @@ export default function ChapterPage() {
   ]
 
   function handlePdfAction(payload: PdfSelectionPayload, m: PdfSelectionAction) {
-    if (m === 'ask' || m === 'summarize' || m === 'explain') {
+    if (
+      m === 'ask' ||
+      m === 'summarize' ||
+      m === 'explain' ||
+      m === 'translate'
+    ) {
+      setDraftCite(null)
+      setDraftNote(null)
+      setPdfSeedQuestion(null)
+      setPdfSel(payload)
+      setPdfMode(m)
+      setMode('source')
+      setMobilePane('notes')
+      return
+    }
+    if (m === 'mindmap') {
       setDraftCite(null)
       setDraftNote(null)
       setPdfSel(payload)
-      setPdfMode(m)
+      setPdfMode('ask')
+      setPdfSeedQuestion(
+        'Bu pasaj için 5–8 kısa zihin haritası dalı öner (isim + 1 satır).',
+      )
+      setMode('source')
       setMobilePane('notes')
+      return
+    }
+    if (m === 'listen') {
+      speakPdfText(payload.selectedText, {
+        onError: (msg) => {
+          setCiteToast(msg)
+          window.setTimeout(() => setCiteToast(null), 2000)
+        },
+      })
       return
     }
     if ((m === 'cite' || m === 'extract') && bookId) {
@@ -567,64 +650,104 @@ export default function ChapterPage() {
   const readBody =
     ready && ch ? (
       <div className="chapter-read">
-        {pdfSel && pdfMode && (
-          <PdfAiPanel
-            chapterId={ch.id}
-            chapterTitle={ch.title}
-            payload={pdfSel}
-            mode={pdfMode}
-            pageSources={ch.page_sources}
-            onJumpPage={(page) => {
-              setPdfFocusPage(page)
-              setMode('source')
-              setMobilePane('pdf')
-            }}
-            onClose={() => {
-              setPdfSel(null)
-              setPdfMode(null)
-            }}
-            onSaveToBook={saveAiFromPanel}
-          />
-        )}
-
-        {readStudio === 'map' && mindMap ? (
-          <section
-            className="studio-stage studio-stage--map"
-            aria-label="Konu haritası"
-          >
-            <MindMapPanel
-              variant="studio"
-              data={mindMap}
-              title={ch.title}
-              chapterId={ch.id}
-              markdown={
-                ch.explanation_detailed ||
-                markdownForDepth ||
-                ch.explanation
-              }
-              pageSources={ch.page_sources}
-              pageText={ch.page_text}
-              startPage={ch.start_page}
-              endPage={ch.end_page}
-              refreshingMap={artifactBusyKind === 'mind_map'}
-              onRefreshMap={() => {
-                artifactTried.current[`${ch.id}:mind_map`] = '1'
-                artifactMutation.mutate({ kind: 'mind_map', force: true })
-              }}
-              onOpenInPdf={(page, label) => {
-                setPdfFocusPage(page)
-                setMode('source')
-                setMobilePane('pdf')
-                setReadStudio(null)
-                setCiteToast(
-                  `Zihin haritasından: “${label.slice(0, 40)}${
-                    label.length > 40 ? '…' : ''
-                  }” · s. ${page}`,
-                )
-                window.setTimeout(() => setCiteToast(null), 2200)
-              }}
-            />
-          </section>
+        {readStudio === 'map' ? (
+          mindMap ? (
+            <section
+              className="studio-stage studio-stage--map"
+              aria-label="Konu haritası"
+            >
+              {!hasAiMindMap ? (
+                <div className="artifact-draft-banner" role="status">
+                  <div>
+                    <p className="artifact-draft-banner__title">
+                      Taslak harita
+                    </p>
+                    <p className="artifact-draft-banner__lead">
+                      Şu an anahtar kavramlardan geçici bir ağaç var. Tam AI
+                      haritası daha zengin dallar ve Dinle turu verir.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-primary text-xs"
+                    disabled={artifactBusyKind === 'mind_map'}
+                    onClick={() => {
+                      artifactTried.current[`${ch.id}:mind_map`] = ''
+                      artifactMutation.mutate({
+                        kind: 'mind_map',
+                        force: true,
+                      })
+                    }}
+                  >
+                    {artifactBusyKind === 'mind_map'
+                      ? 'Üretiliyor…'
+                      : 'Tam harita üret'}
+                  </button>
+                </div>
+              ) : null}
+              <MindMapPanel
+                variant="studio"
+                data={mindMap}
+                title={ch.title}
+                chapterId={ch.id}
+                markdown={
+                  ch.explanation_detailed ||
+                  markdownForDepth ||
+                  ch.explanation
+                }
+                pageSources={ch.page_sources}
+                pageText={ch.page_text}
+                startPage={ch.start_page}
+                endPage={ch.end_page}
+                refreshingMap={artifactBusyKind === 'mind_map'}
+                onRefreshMap={() => {
+                  artifactTried.current[`${ch.id}:mind_map`] = '1'
+                  artifactMutation.mutate({ kind: 'mind_map', force: true })
+                }}
+                onOpenInPdf={(page, label) => {
+                  setPdfFocusPage(page)
+                  setMode('source')
+                  setMobilePane('pdf')
+                  setReadStudio('hub')
+                  setCiteToast(
+                    `Zihin haritasından: “${label.slice(0, 40)}${
+                      label.length > 40 ? '…' : ''
+                    }” · s. ${page}`,
+                  )
+                  window.setTimeout(() => setCiteToast(null), 2200)
+                }}
+              />
+            </section>
+          ) : (
+            <div className="listen-workspace-empty" role="status">
+              <p className="section-label mb-0">Zihin haritası</p>
+              <h2 className="listen-workspace-empty__title">
+                Harita henüz yok
+              </h2>
+              <p className="listen-workspace-empty__lead">
+                Bu ünite için harita üretildikten sonra dalları keşfedebilir ve
+                Dinle turuna geçebilirsin.
+              </p>
+              {artifactError ? (
+                <p className="alert-error text-sm" role="alert">
+                  {artifactError}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={artifactBusyKind === 'mind_map'}
+                onClick={() => {
+                  artifactTried.current[`${ch.id}:mind_map`] = ''
+                  artifactMutation.mutate({ kind: 'mind_map', force: true })
+                }}
+              >
+                {artifactBusyKind === 'mind_map'
+                  ? 'Harita üretiliyor…'
+                  : 'Zihin haritasını üret'}
+              </button>
+            </div>
+          )
         ) : null}
 
         {readStudio === 'guide' ? (
@@ -637,7 +760,7 @@ export default function ChapterPage() {
               quiz={ch.quiz}
               defaultOpen
               onOpenQuiz={() => {
-                setReadStudio(null)
+                setReadStudio('hub')
                 setMode('practice')
                 setPracticePanel('quiz')
                 setFlashOpen(false)
@@ -646,16 +769,128 @@ export default function ChapterPage() {
           </section>
         ) : null}
 
-        {readStudio === null ? (
+        {readStudio === 'prose' ? (
           <section className="chapter-prose">
+            {depthShowingFallback && depthArtifactKind ? (
+              <div className="artifact-draft-banner mb-4" role="status">
+                <div>
+                  <p className="artifact-draft-banner__title">
+                    {depth === 'brief'
+                      ? 'Kısa seviye henüz yok'
+                      : 'Detaylı seviye henüz yok'}
+                  </p>
+                  <p className="artifact-draft-banner__lead">
+                    Şimdilik standart anlatım gösteriliyor. Bu derinliği özel
+                    olarak üretebilirsin.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-primary text-xs"
+                  disabled={artifactBusyKind === depthArtifactKind}
+                  onClick={() => {
+                    setArtifactError(null)
+                    artifactTried.current[`${ch.id}:${depthArtifactKind}`] = ''
+                    artifactMutation.mutate({
+                      kind: depthArtifactKind,
+                      force: true,
+                    })
+                  }}
+                >
+                  {artifactBusyKind === depthArtifactKind
+                    ? 'Üretiliyor…'
+                    : depth === 'brief'
+                      ? 'Kısa anlatımı üret'
+                      : 'Detaylı anlatımı üret'}
+                </button>
+              </div>
+            ) : null}
             {!markdownForDepth ? (
-              <p className="muted text-sm">
-                Bu seviye henüz yok. Menüden içeriği yenileyebilirsin.
-              </p>
+              <div className="listen-workspace-empty" role="status">
+                <p className="section-label mb-0">Anlatım</p>
+                <h2 className="listen-workspace-empty__title">
+                  Bu seviye henüz yok
+                </h2>
+                <p className="listen-workspace-empty__lead">
+                  {depthArtifactKind
+                    ? 'Seçili derinliği üret, sonra buradan oku.'
+                    : 'Önce standart anlatımı üret.'}
+                </p>
+                {artifactError ? (
+                  <p className="alert-error text-sm" role="alert">
+                    {artifactError}
+                  </p>
+                ) : null}
+                {genError ? (
+                  <p className="alert-error text-sm" role="alert">
+                    {genError}
+                  </p>
+                ) : null}
+                {depthArtifactKind ? (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={artifactBusyKind === depthArtifactKind}
+                    onClick={() => {
+                      setArtifactError(null)
+                      artifactTried.current[`${ch.id}:${depthArtifactKind}`] =
+                        ''
+                      artifactMutation.mutate({
+                        kind: depthArtifactKind,
+                        force: true,
+                      })
+                    }}
+                  >
+                    {artifactBusyKind === depthArtifactKind
+                      ? 'Üretiliyor…'
+                      : 'Bu seviyeyi üret'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={generateMutation.isPending}
+                    onClick={() => {
+                      autoRetryRef.current = 0
+                      setGenError(null)
+                      generateMutation.mutate()
+                    }}
+                  >
+                    {generateMutation.isPending
+                      ? 'Üretiliyor…'
+                      : 'Standart anlatımı üret'}
+                  </button>
+                )}
+              </div>
             ) : (
               <Suspense
-                fallback={<p className="muted text-sm">Anlatım yükleniyor…</p>}
+                fallback={
+                  <LessonWaitMood
+                    kind="notes"
+                    size="compact"
+                    title="Anlatım yükleniyor"
+                  />
+                }
               >
+                {mindMap ? (
+                  <div className="lesson-hero-cta" role="region" aria-label="Dersi dinle">
+                    <div className="lesson-hero-cta__copy">
+                      <p className="lesson-hero-cta__eyebrow">En güçlü deneyim</p>
+                      <p className="lesson-hero-cta__title">Dersi dinle</p>
+                      <p className="lesson-hero-cta__lead">
+                        Hoca zihin haritasında düğüm düğüm anlatır — kamera,
+                        karaoke, soru sor.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-primary lesson-hero-cta__btn"
+                      onClick={() => setReadStudio('audio')}
+                    >
+                      Dersi dinle
+                    </button>
+                  </div>
+                ) : null}
                 <ExplanationWithInlineChat
                   chapterId={ch.id}
                   chapterTitle={ch.title}
@@ -713,8 +948,12 @@ export default function ChapterPage() {
     ready && ch ? (
       <div className="chapter-practice">
         {artifactBusyKind === 'practice' ? (
-          <div className="alert-info mb-4">
-            Alıştır ilk kez hazırlanıyor… Sonraki açılışlarda anında gelir.
+          <div className="mb-4">
+            <LessonWaitMood
+              kind="practice"
+              size="banner"
+              detail="İlk kez hazırlanıyor — sonraki açılışlarda anında gelir."
+            />
           </div>
         ) : null}
         {chapterDue && bookId && chapterId ? (
@@ -752,38 +991,6 @@ export default function ChapterPage() {
           </div>
         ) : null}
 
-        <div
-          className="mode-segment mode-segment--secondary"
-          role="tablist"
-          aria-label="Alıştır paneli"
-        >
-          {(
-            [
-              ['quiz', 'Sınav'],
-              ['examples', 'Çözümlü'],
-              ['flash', 'Flash'],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={practicePanel === id}
-              className={`chip ${practicePanel === id ? 'chip-active' : 'chip-idle'}`}
-              onClick={() => {
-                setPracticePanel(id)
-                setFlashOpen(false)
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <p className="muted text-xs">
-          Sınav soruları, çözümlü örnekler ve deneme. Flash isteğe bağlı tekrar.
-        </p>
-
         {practicePanel === 'quiz' && (
           <section className="surface-panel p-5 sm:p-8">
             <div className="mb-4">
@@ -792,6 +999,26 @@ export default function ChapterPage() {
                 Soru çöz · skor al
               </p>
             </div>
+            {!combinedQuiz.length && artifactBusyKind !== 'practice' ? (
+              <div className="practice-empty mb-4" role="status">
+                <p className="practice-empty__title">Henüz soru yok</p>
+                <p className="muted text-sm">
+                  Alıştır paketini üret veya aşağıdan hemen yeni soru ekle.
+                </p>
+                <button
+                  type="button"
+                  className="btn-ghost text-xs mt-2"
+                  disabled={artifactBusyKind === 'practice'}
+                  onClick={() => {
+                    setArtifactError(null)
+                    artifactTried.current[`${ch.id}:practice`] = ''
+                    artifactMutation.mutate({ kind: 'practice', force: true })
+                  }}
+                >
+                  Alıştır paketini üret
+                </button>
+              </div>
+            ) : null}
             <QuizPlayer
               quiz={combinedQuiz}
               bookTitle={bookQuery.data?.title}
@@ -836,6 +1063,26 @@ export default function ChapterPage() {
                 Adım adım çözüm
               </p>
             </div>
+            {!combinedExamples.length && artifactBusyKind !== 'practice' ? (
+              <div className="practice-empty mb-4" role="status">
+                <p className="practice-empty__title">Henüz örnek yok</p>
+                <p className="muted text-sm">
+                  Paketi üret veya aşağıdan yeni çözümlü ekle.
+                </p>
+                <button
+                  type="button"
+                  className="btn-ghost text-xs mt-2"
+                  disabled={artifactBusyKind === 'practice'}
+                  onClick={() => {
+                    setArtifactError(null)
+                    artifactTried.current[`${ch.id}:practice`] = ''
+                    artifactMutation.mutate({ kind: 'practice', force: true })
+                  }}
+                >
+                  Alıştır paketini üret
+                </button>
+              </div>
+            ) : null}
             <ExamplesPanel examples={combinedExamples} />
             <PracticeMoreBar
               kind="example"
@@ -936,140 +1183,97 @@ export default function ChapterPage() {
   function clearPanelFocus() {
     setPdfSel(null)
     setPdfMode(null)
+    setPdfSeedQuestion(null)
     setDraftCite(null)
     setDraftNote(null)
     setNoteBody('')
+    stopPdfSpeak()
   }
 
   const sourceNotes = (
-    <div
-      className={`notes-rail ${panelFocus ? 'notes-rail--focus' : ''}`}
+    <PdfStudyAssistRail
+      bookTitle={bookQuery.data?.title || ch?.title || 'PDF'}
+      noteCount={pageMarks.length}
+      chapterId={ch?.id || chapterId || 'chapter'}
+      chapterTitle={ch?.title || 'Ünite'}
+      payload={pdfSel}
+      mode={pdfMode}
+      seedQuestion={pdfSeedQuestion}
+      pageSources={ch?.page_sources}
+      hideIdle={!!draftNote || !!draftCite}
+      onJumpPage={(page) => {
+        setPdfFocusPage(page)
+        setMobilePane('pdf')
+      }}
+      onCloseAssist={clearPanelFocus}
+      onSaveToBook={saveAiFromPanel}
     >
-      <header className="notes-rail__head">
-        <div>
-          <p className="notes-rail__title">Notlar</p>
-          <p className="notes-rail__sub">
-            {panelFocus
-              ? 'Şu an tek iş'
-              : pageMarks.length > 0
-                ? `${pageMarks.length} ek`
-                : 'Metin seç → sor / Cite'}
-          </p>
-        </div>
-        <div className="notes-rail__actions">
-          {panelFocus ? (
-            <button
-              type="button"
-              className="btn-ghost text-[11px]"
-              onClick={clearPanelFocus}
-            >
-              Kapat
-            </button>
-          ) : null}
-        </div>
-      </header>
-
-      {citeToast && (
-        <div className="alert-info notes-rail__toast text-sm">{citeToast}</div>
-      )}
-
-      <div className="notes-rail__body">
-        {panelFocus ? (
-          <div className="notes-rail__workspace">
-            {noteComposer}
-            {draftCite && bookId && (
-              <CiteDraftPanel
-                bookId={bookId}
-                bookTitle={bookQuery.data?.title || ch?.title || 'PDF'}
-                payload={draftCite}
-                onCancel={() => setDraftCite(null)}
-                onSaved={(formatted, style) => {
-                  addPdfAnnotation(bookId, {
-                    page: draftCite.page,
-                    kind: 'cite',
-                    quote: draftCite.selectedText,
-                    body: formatted,
-                    citeStyle: style,
-                    textStyle: draftCite.textStyle,
-                  })
-                  setDraftCite(null)
-                  refreshPdfNotes()
-                  setCiteToast(
-                    `${citationStyleLabel(style)} panoya + notlara eklendi`,
-                  )
-                  window.setTimeout(() => setCiteToast(null), 2200)
-                }}
-              />
-            )}
-            {pdfSel && pdfMode && (
-              <PdfAiPanel
-                chapterId={ch?.id || chapterId || 'chapter'}
-                chapterTitle={ch?.title || 'Ünite'}
-                payload={pdfSel}
-                mode={pdfMode}
-                pageSources={ch?.page_sources}
-                onJumpPage={(page) => {
-                  setPdfFocusPage(page)
-                  setMobilePane('pdf')
-                }}
-                onClose={() => {
-                  setPdfSel(null)
-                  setPdfMode(null)
-                }}
-                onSaveToBook={saveAiFromPanel}
-              />
-            )}
-          </div>
-        ) : (
-          <>
-            {pageMarks.length === 0 ? (
-              <div className="notes-empty">
-                <p className="notes-empty__title">
-                  {ready ? 'Soldan metin seç' : 'Önce kaynakta çalış'}
-                </p>
-                <p className="muted text-xs leading-relaxed">
-                  AI’ya sor · Cite · Vurgula — cevaplar burada ve PDF’nin içinde
-                  toplanır.
-                </p>
-              </div>
-            ) : (
-              <ul className="notes-feed">
-                {pageMarks.map((n) => (
-                  <li key={n.id}>
-                    <button
-                      type="button"
-                      className="notes-card"
-                      onClick={() => {
-                        setPdfFocusPage(n.page)
-                        setMobilePane('pdf')
-                      }}
-                    >
-                      <span className="notes-card__meta">
-                        {n.kind === 'ai'
-                          ? annotationAiLabel(n.aiMode)
-                          : annotationKindLabel(n.kind)}
-                        <span aria-hidden>·</span>
-                        s. {n.page}
-                      </span>
-                      <span className="notes-card__quote">
-                        “{n.quote.replace(/\s+/g, ' ').slice(0, 110)}
-                        {n.quote.length > 110 ? '…' : ''}”
-                      </span>
-                      {n.body ? (
-                        <span className="notes-card__body">
-                          {n.body.replace(/\s+/g, ' ').slice(0, 140)}
-                          {n.body.length > 140 ? '…' : ''}
-                        </span>
-                      ) : null}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+      {citeToast ? (
+        <div className="alert-info text-sm">{citeToast}</div>
+      ) : null}
+      {noteComposer}
+      {draftCite && bookId ? (
+        <CiteDraftPanel
+          bookId={bookId}
+          bookTitle={bookQuery.data?.title || ch?.title || 'PDF'}
+          payload={draftCite}
+          onCancel={() => setDraftCite(null)}
+          onSaved={(formatted, style) => {
+            addPdfAnnotation(bookId, {
+              page: draftCite.page,
+              kind: 'cite',
+              quote: draftCite.selectedText,
+              body: formatted,
+              citeStyle: style,
+              textStyle: draftCite.textStyle,
+            })
+            setDraftCite(null)
+            refreshPdfNotes()
+            setCiteToast(
+              `${citationStyleLabel(style)} panoya + notlara eklendi`,
+            )
+            window.setTimeout(() => setCiteToast(null), 2200)
+          }}
+        />
+      ) : null}
+      {pageMarks.length > 0 ? (
+        <section className="space-y-2 mt-2">
+          <p className="section-label mb-0">Sayfa notları</p>
+          <ul className="notes-feed">
+            {pageMarks.map((n) => (
+              <li key={n.id}>
+                <button
+                  type="button"
+                  className="notes-card"
+                  onClick={() => {
+                    setPdfFocusPage(n.page)
+                    setMobilePane('pdf')
+                  }}
+                >
+                  <span className="notes-card__meta">
+                    {n.kind === 'ai'
+                      ? annotationAiLabel(n.aiMode)
+                      : annotationKindLabel(n.kind)}
+                    <span aria-hidden>·</span>
+                    s. {n.page}
+                  </span>
+                  <span className="notes-card__quote">
+                    “{n.quote.replace(/\s+/g, ' ').slice(0, 110)}
+                    {n.quote.length > 110 ? '…' : ''}”
+                  </span>
+                  {n.body ? (
+                    <span className="notes-card__body">
+                      {n.body.replace(/\s+/g, ' ').slice(0, 140)}
+                      {n.body.length > 140 ? '…' : ''}
+                    </span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </PdfStudyAssistRail>
   )
 
   return (
@@ -1108,9 +1312,7 @@ export default function ChapterPage() {
         active={readStudio}
         onChange={(tab) => {
           setReadStudio(tab)
-          if (tab === 'map' || tab === 'guide' || tab === 'audio') {
-            setMobilePane('notes')
-          }
+          setMobilePane('notes')
         }}
         hasMap={!!mindMap}
         tools={[
@@ -1136,25 +1338,55 @@ export default function ChapterPage() {
             title:
               mode === 'source'
                 ? 'Notları PDF indir'
-                : 'Anlatımı PDF indir',
+                : 'Anlatımı Markdown (.md) indir',
             hidden:
               mode === 'source'
                 ? exportableNotes(pdfNotes).length === 0
-                : mode !== 'read' || !markdownForDepth,
+                : mode !== 'read' || !String(markdownForDepth || '').trim(),
             onClick: () => {
               if (mode === 'source') {
+                setCiteToast('Notlar PDF hazırlanıyor…')
                 void downloadNotesPdf(exportableNotes(pdfNotes), {
                   bookTitle: bookQuery.data?.title || 'Studium',
                   chapterTitle: ch?.title,
                 })
+                  .then(() => {
+                    setCiteToast('Notlar indirildi')
+                    window.setTimeout(() => setCiteToast(null), 2200)
+                  })
+                  .catch((err: unknown) => {
+                    console.error(err)
+                    setCiteToast(
+                      err instanceof Error
+                        ? err.message
+                        : 'PDF indirilemedi',
+                    )
+                    window.setTimeout(() => setCiteToast(null), 3600)
+                  })
                 return
               }
-              if (!markdownForDepth || !ch) return
-              void downloadMarkdownAsPdf(markdownForDepth, {
-                bookTitle: bookQuery.data?.title || 'Studium',
-                chapterTitle: ch.title,
-                subtitle: `Anlatım · ${depthLabel}`,
-              })
+              if (!String(markdownForDepth || '').trim() || !ch) {
+                setCiteToast('İndirilecek anlatım yok')
+                window.setTimeout(() => setCiteToast(null), 2200)
+                return
+              }
+              try {
+                downloadMarkdownFile(markdownForDepth, {
+                  bookTitle: bookQuery.data?.title || 'Studium',
+                  chapterTitle: ch.title,
+                  subtitle: `Anlatım · ${depthLabel}`,
+                })
+                setCiteToast('Anlatım indirildi (.md)')
+                window.setTimeout(() => setCiteToast(null), 2200)
+              } catch (err: unknown) {
+                console.error(err)
+                setCiteToast(
+                  err instanceof Error
+                    ? err.message
+                    : 'Anlatım indirilemedi',
+                )
+                window.setTimeout(() => setCiteToast(null), 3600)
+              }
             },
           },
           {
@@ -1351,13 +1583,21 @@ export default function ChapterPage() {
                       }`}
                       onClick={() => {
                         setMode(m.id)
-                        if (m.id !== 'read') setReadStudio(null)
+                        if (m.id !== 'source') {
+                          setPdfSel(null)
+                          setPdfMode(null)
+                          setPdfSeedQuestion(null)
+                          setDraftCite(null)
+                          setDraftNote(null)
+                          stopPdfSpeak()
+                        }
+                        if (m.id === 'read') setReadStudio('hub')
                         if (m.id === 'source') setMobilePane('pdf')
                         if (m.id === 'read' || m.id === 'practice') {
                           setMobilePane('notes')
                         }
                         if (m.id === 'practice') {
-                          setPracticePanel('quiz')
+                          setPracticePanel('hub')
                           setFlashOpen(false)
                         }
                       }}
@@ -1367,7 +1607,9 @@ export default function ChapterPage() {
                   ))}
               </div>
 
-              {mode === 'read' && ready && readStudio !== 'audio' ? (
+              {mode === 'read' &&
+              ready &&
+              readStudio === 'prose' ? (
                 <div
                   className="mode-segment mode-segment--secondary"
                   role="tablist"
@@ -1481,23 +1723,69 @@ export default function ChapterPage() {
       {(ch?.status === 'generating' ||
         generateMutation.isPending ||
         bundleMutation.isPending) && (
-        <div className="alert-info mb-4">
-          Standart anlatım üretiliyor… Sayfalar taranıyor (özet / detay /
-          alıştır tıklayınca gelir).
+        <div className="mb-4">
+          <LessonWaitMood
+            kind={bundleMutation.isPending ? 'bundle' : 'notes'}
+            size="banner"
+            detail={
+              bundleMutation.isPending
+                ? 'Not + özet + detay + alıştır + harita'
+                : 'Özet / detay / alıştır tıklayınca gelir'
+            }
+          />
         </div>
       )}
 
-      {artifactBusyKind && (
-        <div className="alert-info mb-4">
-          {artifactBusyKind === 'brief'
-            ? 'Kısa özet üretiliyor…'
-            : artifactBusyKind === 'detailed'
-              ? 'Detaylı anlatım üretiliyor…'
-              : artifactBusyKind === 'practice'
-                ? 'Alıştır materyali üretiliyor (quiz, örnek, flash)…'
-                : 'Zihin haritası üretiliyor…'}
+      {genError && !needsContent ? (
+        <div className="alert-error mb-4 flex flex-wrap items-center gap-2">
+          <span>{genError}</span>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={generateMutation.isPending || bundleMutation.isPending}
+            onClick={() => {
+              autoRetryRef.current = 0
+              setGenError(null)
+              generateMutation.mutate()
+            }}
+          >
+            Tekrar dene
+          </button>
         </div>
-      )}
+      ) : null}
+
+      {artifactBusyKind &&
+      !(
+        artifactBusyKind === 'practice' &&
+        mode === 'practice'
+      ) ? (
+        <div className="mb-4">
+          <LessonWaitMood
+            kind={
+              artifactBusyKind === 'practice'
+                ? 'practice'
+                : artifactBusyKind === 'mind_map'
+                  ? 'mindmap'
+                  : 'notes'
+            }
+            size="banner"
+            title={
+              artifactBusyKind === 'brief'
+                ? 'Kısa özet hazırlanıyor'
+                : artifactBusyKind === 'detailed'
+                  ? 'Detaylı anlatım hazırlanıyor'
+                  : artifactBusyKind === 'practice'
+                    ? 'Alıştır hazırlanıyor'
+                    : 'Zihin haritası hazırlanıyor'
+            }
+            detail={
+              artifactBusyKind === 'practice'
+                ? 'Quiz, örnek ve flash kartlar'
+                : null
+            }
+          />
+        </div>
+      ) : null}
 
       {artifactError && (
         <div className="alert-error mb-4 flex flex-wrap items-center gap-2">
@@ -1511,7 +1799,7 @@ export default function ChapterPage() {
               const kind: ChapterArtifactKind | null =
                 mode === 'practice'
                   ? 'practice'
-                  : readStudio === 'map'
+                  : readStudio === 'map' || readStudio === 'audio'
                     ? 'mind_map'
                     : depth === 'brief'
                       ? 'brief'
@@ -1520,7 +1808,7 @@ export default function ChapterPage() {
                         : null
               if (!kind || !ch) return
               artifactTried.current[`${ch.id}:${kind}`] = ''
-              artifactMutation.mutate({ kind })
+              artifactMutation.mutate({ kind, force: true })
             }}
           >
             Tekrar dene
@@ -1528,34 +1816,156 @@ export default function ChapterPage() {
         </div>
       )}
 
-      {mode === 'read' && readStudio === 'audio' && mindMap && ch ? (
-        <ListenLessonStudio
-          chapterId={ch.id}
-          title={ch.title}
-          summary={ch.summary}
-          keyConcepts={ch.key_concepts}
-          markdown={markdownForDepth || ch.explanation}
-          mindMap={mindMap}
-          refreshingMap={artifactBusyKind === 'mind_map'}
-          onRefreshMap={() => {
-            artifactTried.current[`${ch.id}:mind_map`] = '1'
-            artifactMutation.mutate({ kind: 'mind_map', force: true })
-          }}
-        />
-      ) : hasPdf ? (
+      {mode === 'read' && ready && ch ? (
+        readStudio === 'hub' ? (
+          <ReadStudioLobby
+            chapterTitle={ch.title}
+            onPick={(id) => setReadStudio(id)}
+          />
+        ) : readStudio === 'audio' ? (
+          mindMap ? (
+            <>
+              {!hasAiMindMap ? (
+                <div className="artifact-draft-banner mb-2" role="status">
+                  <div>
+                    <p className="artifact-draft-banner__title">
+                      Taslak harita ile tur
+                    </p>
+                    <p className="artifact-draft-banner__lead">
+                      Dinle çalışır ama dallar sınırlı. Tam AI haritası daha iyi
+                      bir ders verir.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-primary text-xs"
+                    disabled={artifactBusyKind === 'mind_map'}
+                    onClick={() => {
+                      artifactTried.current[`${ch.id}:mind_map`] = ''
+                      artifactMutation.mutate({
+                        kind: 'mind_map',
+                        force: true,
+                      })
+                    }}
+                  >
+                    {artifactBusyKind === 'mind_map'
+                      ? 'Üretiliyor…'
+                      : 'Tam harita üret'}
+                  </button>
+                </div>
+              ) : null}
+              <StudioBackBar
+                galleryLabel="Anlatım galerisi"
+                currentLabel="Dersi dinle"
+                escapeEnabled={!flashOpen}
+                onBack={() => setReadStudio('hub')}
+              />
+              <ListenLessonStudio
+                chapterId={ch.id}
+                title={ch.title}
+                summary={ch.summary}
+                keyConcepts={ch.key_concepts}
+                markdown={markdownForDepth || ch.explanation}
+                mindMap={mindMap}
+                refreshingMap={artifactBusyKind === 'mind_map'}
+                onRefreshMap={() => {
+                  artifactTried.current[`${ch.id}:mind_map`] = '1'
+                  artifactMutation.mutate({ kind: 'mind_map', force: true })
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <StudioBackBar
+                galleryLabel="Anlatım galerisi"
+                currentLabel="Dinle"
+                escapeEnabled={!flashOpen}
+                onBack={() => setReadStudio('hub')}
+              />
+              <div className="listen-workspace-empty" role="status">
+                <p className="section-label mb-0">Dinle</p>
+                <h2 className="listen-workspace-empty__title">
+                  Harita henüz hazır değil
+                </h2>
+                <p className="listen-workspace-empty__lead">
+                  Hoca turu zihin haritası üzerinde yürür. Önce haritayı üret,
+                  sonra düğüm düğüm dinlemeye geç.
+                </p>
+                {artifactError ? (
+                  <p className="alert-error text-sm" role="alert">
+                    {artifactError}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={artifactBusyKind === 'mind_map'}
+                  onClick={() => {
+                    artifactTried.current[`${ch.id}:mind_map`] = ''
+                    artifactMutation.mutate({ kind: 'mind_map', force: true })
+                  }}
+                >
+                  {artifactBusyKind === 'mind_map'
+                    ? 'Harita üretiliyor…'
+                    : 'Zihin haritasını üret'}
+                </button>
+              </div>
+            </>
+          )
+        ) : (
+          <>
+            <StudioBackBar
+              galleryLabel="Anlatım galerisi"
+              currentLabel={
+                readStudio === 'map'
+                  ? 'Zihin haritası'
+                  : readStudio === 'guide'
+                    ? 'Kılavuz'
+                    : 'Anlatım'
+              }
+              escapeEnabled={!flashOpen}
+              onBack={() => setReadStudio('hub')}
+            />
+            {readBody ?? (
+              <p className="muted text-sm">Anlatım henüz hazır değil.</p>
+            )}
+          </>
+        )
+      ) : mode === 'practice' && ready && ch ? (
+        practicePanel === 'hub' ? (
+          <PracticeLobby
+            chapterTitle={ch.title}
+            onPick={(id) => {
+              setPracticePanel(id)
+              if (id === 'flash') setFlashOpen(false)
+            }}
+          />
+        ) : (
+          <>
+            <StudioBackBar
+              galleryLabel="Alıştır galerisi"
+              currentLabel={
+                practicePanel === 'quiz'
+                  ? 'Ünite sınavı'
+                  : practicePanel === 'examples'
+                    ? 'Çözümlü örnekler'
+                    : 'Flash Stories'
+              }
+              escapeEnabled={!flashOpen}
+              onBack={() => {
+                setPracticePanel('hub')
+                setFlashOpen(false)
+              }}
+            />
+            {practiceBody ?? (
+              <p className="muted text-sm">Alıştır henüz hazır değil.</p>
+            )}
+          </>
+        )
+      ) : hasPdf && mode === 'source' ? (
         <StudySplitPane
-          className={
-            mode === 'read' && readStudio === 'map'
-              ? 'study-split--map-focus'
-              : ''
-          }
-          rightLabel={
-            mode === 'read'
-              ? 'Anlatım'
-              : mode === 'practice'
-                ? 'Alıştır'
-                : 'Notlar'
-          }
+          stickyAssist
+          rightLabel="Asistan"
           mobilePane={mobilePane}
           onMobilePaneChange={setMobilePane}
           left={
@@ -1576,34 +1986,17 @@ export default function ChapterPage() {
               chapterTitle={ch?.title || 'Ünite'}
               onAnnotationsChange={refreshPdfNotes}
               onAction={handlePdfAction}
+              flowScroll
             />
           }
-          right={
-            mode === 'source' ? (
-              sourceNotes
-            ) : mode === 'read' ? (
-              readBody ?? (
-                <p className="muted text-sm">Anlatım henüz hazır değil.</p>
-              )
-            ) : (
-              practiceBody ?? (
-                <p className="muted text-sm">Alıştır henüz hazır değil.</p>
-              )
-            )
-          }
+          right={sourceNotes}
         />
-      ) : (
-        <>
-          {mode === 'read' && readBody}
-          {mode === 'practice' && practiceBody}
-          {mode === 'source' && (
-            <div className="surface-panel p-5">
-              <p className="muted text-sm">Bu kitap için PDF yok.</p>
-              {sourceNotes}
-            </div>
-          )}
-        </>
-      )}
+      ) : mode === 'source' ? (
+        <div className="surface-panel p-5">
+          <p className="muted text-sm">Bu kitap için PDF yok.</p>
+          {sourceNotes}
+        </div>
+      ) : null}
 
       {togetherOpen && membership && groupQuery.data && ch && (
         <div className="chapter-together mt-8" id="chapter-together">

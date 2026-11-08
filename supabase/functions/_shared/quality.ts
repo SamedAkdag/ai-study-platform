@@ -4,7 +4,12 @@
  */
 
 import type { MindMap } from './mindMapGen.ts'
-import { toTopicLabel } from './mindMapGen.ts'
+import {
+  isSentenceFragmentLabel,
+  isWeakTopicLabel,
+  toMindMapNodeLabel,
+  toTopicLabel,
+} from './mindMapGen.ts'
 
 export type QualityReport = {
   kind: string
@@ -202,32 +207,49 @@ export function validateAndCleanExamples(raw: unknown): {
   }
 }
 
-/** Drop sentence-like children; keep short TOC labels. */
+/** Keep only complete noun-phrase titles — drop half-sentences / definition scraps. */
 export function scrubMindMapLabels(map: MindMap): MindMap {
-  const branches = map.branches.map((b) => {
-    const label = toTopicLabel(b.label, 8, 52) || b.label
-    const children = (b.children ?? [])
-      .map((c) => toTopicLabel(c, 8, 48))
-      .filter((c) => {
-        if (!c) return false
-        if (SENTENCE_RE.test(c) && c.split(/\s+/).length > 6) return false
-        if (c.length > 56) return false
-        return true
-      })
-      .slice(0, 6)
-    return {
-      ...b,
-      label,
-      children,
-      ...(b.page ? { page: b.page } : {}),
-      ...(b.narration ? { narration: b.narration } : {}),
-      ...(b.child_narrations?.length
-        ? { child_narrations: b.child_narrations.slice(0, children.length) }
-        : {}),
-    }
-  })
+  const branches = map.branches
+    .map((b) => {
+      let label = toMindMapNodeLabel(b.label)
+      const children = (b.children ?? [])
+        .map((c) => toMindMapNodeLabel(c))
+        .filter((c) => {
+          if (!c) return false
+          if (isWeakTopicLabel(c) || isSentenceFragmentLabel(c)) return false
+          if (SENTENCE_RE.test(c)) return false
+          if (c.length > 52) return false
+          return true
+        })
+        .slice(0, 6)
+      if (!label || isWeakTopicLabel(label) || isSentenceFragmentLabel(label)) {
+        const promoted = children.find(
+          (c) => !isWeakTopicLabel(c) && !isSentenceFragmentLabel(c),
+        )
+        if (!promoted) return null
+        label = promoted
+      }
+      return {
+        ...b,
+        label,
+        children: children.filter(
+          (c) => c.toLowerCase() !== label!.toLowerCase(),
+        ),
+        ...(b.page ? { page: b.page } : {}),
+        // Narration is spoken prose — OK. Never use narration as the visible label.
+        ...(b.narration ? { narration: b.narration } : {}),
+        ...(b.child_narrations?.length
+          ? { child_narrations: b.child_narrations.slice(0, children.length) }
+          : {}),
+      }
+    })
+    .filter((b): b is NonNullable<typeof b> => !!b && !!b.label)
+  const central =
+    toMindMapNodeLabel(map.central) ||
+    toTopicLabel(map.central, 5, 40) ||
+    map.central
   return {
-    central: toTopicLabel(map.central, 6, 40) || map.central,
+    central,
     ...(map.narration ? { narration: map.narration } : {}),
     branches,
   }
@@ -253,13 +275,20 @@ export function scoreMindMap(
   let filled = 0
   let sentenceKids = 0
   let totalKids = 0
+  let weakLabels = 0
   for (const b of map.branches) {
+    if (isWeakTopicLabel(b.label)) weakLabels += 1
     const kids = b.children ?? []
     totalKids += kids.length
     if (kids.length >= 2) filled += 1
     for (const c of kids) {
+      if (isWeakTopicLabel(c)) weakLabels += 1
       if (SENTENCE_RE.test(c) || c.split(/\s+/).length > 8) sentenceKids += 1
     }
+  }
+  if (weakLabels > 0) {
+    issues.push('weak_topic_labels')
+    score -= Math.min(40, weakLabels * 10)
   }
   score += Math.min(25, filled * 4)
   if (totalKids === 0) {

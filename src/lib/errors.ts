@@ -50,3 +50,25 @@ export function isRetryableAiError(err: unknown): boolean {
     raw,
   )
 }
+
+/** User-facing EMA / browser TTS failures (Dinle, site-wide speak). */
+export function friendlyEmaError(err: unknown): string {
+  const raw = asError(err).message || ''
+  const lower = raw.toLowerCase()
+  if (/abort/i.test(lower)) return 'İşlem iptal edildi.'
+  if (
+    /webgpu|gpu|adapter|device lost|wasm|onnx|ort|out of memory|oom/i.test(
+      lower,
+    )
+  ) {
+    return 'Bu tarayıcıda ses modeli yüklenemedi. Chrome/Edge dene veya sayfayı yenileyip tekrar başlat.'
+  }
+  if (/failed to (send|fetch)|network|load failed|timeout|timed out|404|cors/i.test(lower)) {
+    return 'Ses modeli indirilemedi. İnternetini kontrol edip tekrar dene (ilk seferde ~30–40 MB).'
+  }
+  if (/quota|storage|indexeddb/i.test(lower)) {
+    return 'Tarayıcı depolama dolu olabilir. Biraz yer açıp tekrar dene.'
+  }
+  if (raw.length > 160) return `${raw.slice(0, 140)}…`
+  return raw || 'Ses üretilemedi — tekrar dene.'
+}

@@ -17,27 +17,30 @@ type Props = {
   hold?: () => void
   /** Region marquee (chart/figure) — AI-first actions, no text replace. */
   variant?: 'text' | 'region'
+  /** After double-click paragraph — emphasize Ask (kept for callers). */
+  emphasizeAsk?: boolean
 }
 
 type MoreItem = { action: PdfSelectionAction; label: string }
 
-/** Study-first secondaries + edit tools buried here */
 const TEXT_MORE: MoreItem[] = [
-  { action: 'explain', label: 'Açıkla' },
+  { action: 'listen', label: 'Sesli oku' },
+  { action: 'translate', label: 'Çevir' },
+  { action: 'mindmap', label: 'Zihin haritası' },
+  { action: 'note', label: 'Not al' },
+  { action: 'highlight', label: 'Vurgu' },
   { action: 'cite', label: 'Cite' },
-  { action: 'underline', label: 'Altını çiz' },
-  { action: 'strike', label: 'Üstünü çiz' },
   { action: 'copy', label: 'Kopyala' },
   { action: 'bookmark', label: 'Yer imi' },
+  { action: 'underline', label: 'Altını çiz' },
+  { action: 'strike', label: 'Üstünü çiz' },
   { action: 'omit', label: 'Metni gizle' },
   { action: 'replace', label: 'Değiştir' },
   { action: 'redact', label: 'Sansür' },
 ]
 
 /**
- * Floats under a PDF selection — study-first, edit tools secondary.
- * Primaries (text): Vurgu · AI · Not · Özetle · ⋯
- * Primaries (region): Açıkla · Özetle · AI’ya sor · Not
+ * Floats under a PDF selection — Ask first, then a few tools + ⋯.
  */
 export default function SelectionActionBar({
   preview,
@@ -110,6 +113,41 @@ export default function SelectionActionBar({
     onAction(action)
   }
 
+  const moreMenu = (
+    <div className="sel-menu">
+      <button
+        ref={moreBtnRef}
+        type="button"
+        className="chip chip-idle"
+        aria-label="Daha fazla"
+        aria-expanded={moreOpen}
+        onPointerDown={arm}
+        onClick={() => setMoreOpen((v) => !v)}
+      >
+        ⋯
+      </button>
+      {moreOpen && panelPos ? (
+        <div
+          ref={panelRef}
+          className="sel-menu__panel sel-menu__panel--grid"
+          style={panelPos}
+          data-selection-toolbar
+        >
+          {TEXT_MORE.map((item, i) => (
+            <button
+              key={`${item.action}-${item.label}-${i}`}
+              type="button"
+              onPointerDown={arm}
+              onClick={() => run(item.action)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+
   return (
     <div
       ref={rootRef}
@@ -134,7 +172,15 @@ export default function SelectionActionBar({
           <>
             <button
               type="button"
-              className="btn-primary !px-3 !py-1.5 text-xs"
+              className="btn-primary selection-action-bar__ask"
+              onPointerDown={arm}
+              onClick={() => run('ask')}
+            >
+              AI'a sor
+            </button>
+            <button
+              type="button"
+              className="chip chip-idle"
               onPointerDown={arm}
               onClick={() => run('explain')}
             >
@@ -148,48 +194,17 @@ export default function SelectionActionBar({
             >
               Özetle
             </button>
-            <button
-              type="button"
-              className="chip chip-idle"
-              onPointerDown={arm}
-              onClick={() => run('ask')}
-            >
-              AI’ya sor
-            </button>
-            <button
-              type="button"
-              className="chip chip-idle"
-              onPointerDown={arm}
-              onClick={() => run('note')}
-            >
-              Not
-            </button>
+            {moreMenu}
           </>
         ) : (
           <>
             <button
               type="button"
-              className="btn-primary !px-3 !py-1.5 text-xs"
-              onPointerDown={arm}
-              onClick={() => run('highlight')}
-            >
-              Vurgu
-            </button>
-            <button
-              type="button"
-              className="chip chip-idle"
+              className="btn-primary selection-action-bar__ask"
               onPointerDown={arm}
               onClick={() => run('ask')}
             >
-              AI
-            </button>
-            <button
-              type="button"
-              className="chip chip-idle"
-              onPointerDown={arm}
-              onClick={() => run('note')}
-            >
-              Not
+              AI'a sor
             </button>
             <button
               type="button"
@@ -199,38 +214,15 @@ export default function SelectionActionBar({
             >
               Özetle
             </button>
-            <div className="sel-menu">
-              <button
-                ref={moreBtnRef}
-                type="button"
-                className="chip chip-idle"
-                aria-label="Daha fazla"
-                aria-expanded={moreOpen}
-                onPointerDown={arm}
-                onClick={() => setMoreOpen((v) => !v)}
-              >
-                ⋯
-              </button>
-              {moreOpen && panelPos ? (
-                <div
-                  ref={panelRef}
-                  className="sel-menu__panel sel-menu__panel--grid"
-                  style={panelPos}
-                  data-selection-toolbar
-                >
-                  {TEXT_MORE.map((item) => (
-                    <button
-                      key={item.action}
-                      type="button"
-                      onPointerDown={arm}
-                      onClick={() => run(item.action)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            <button
+              type="button"
+              className="chip chip-idle"
+              onPointerDown={arm}
+              onClick={() => run('explain')}
+            >
+              Açıkla
+            </button>
+            {moreMenu}
           </>
         )}
       </div>

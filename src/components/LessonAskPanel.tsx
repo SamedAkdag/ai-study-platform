@@ -16,6 +16,7 @@ import {
   stopSpeech,
   toLectureSpeechText,
 } from '@/lib/tts'
+import LessonWaitMood from '@/components/LessonWaitMood'
 
 type Turn = { role: 'user' | 'assistant'; content: string }
 
@@ -293,9 +294,7 @@ export default function LessonAskPanel({
           </div>
         ))}
         {busy ? (
-          <p className="lesson-ask__pending" role="status">
-            Hoca düşünüyor…
-          </p>
+          <LessonWaitMood kind="thinking" size="compact" className="lesson-ask__wait" />
         ) : null}
       </div>
 
@@ -306,10 +305,17 @@ export default function LessonAskPanel({
       ) : null}
 
       {listening ? (
-        <p className="lesson-ask__listening" role="status">
-          Dinleniyor… konuş, bitince tekrar mikrofona bas veya Gönder’e tıkla
-          {interim ? ` · “${interim}”` : ''}
-        </p>
+        <LessonWaitMood
+          kind="speaking"
+          size="compact"
+          className="lesson-ask__wait"
+          title="Seni dinliyor"
+          detail={
+            interim
+              ? `“${interim}”`
+              : 'Konuş, bitince mikrofona bas veya Gönder’e tıkla'
+          }
+        />
       ) : null}
 
       <div className="lesson-ask__composer">

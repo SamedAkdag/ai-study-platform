@@ -1,6 +1,6 @@
-// Token Harbor → Xiaomi MiMo (OpenAI-compatible)
-// Official example: base https://tokenharbor.ai/v1 , model mimo-v2.6-flash:free
-// Secrets: TOKENHARBOR_API_KEY (or TOKEN_HARBOR_API_KEY)
+// Requesty router (OpenAI-compatible Chat Completions)
+// Docs: https://router.requesty.ai/v1  ·  model novita/ling-3.1-flash
+// Secrets: REQUESTY_API_KEY (AI_GATEWAY_* / TOKENHARBOR_* still accepted)
 
 /** OpenAI-style text or multimodal content parts (image_url + text). */
 export type MimoContentPart =
@@ -12,24 +12,41 @@ export type MimoMessage = {
   content: string | MimoContentPart[]
 }
 
-const DEFAULT_BASE = 'https://tokenharbor.ai/v1'
-const DEFAULT_MODEL = 'mimo-v2.6-flash:free'
-const RETRIES = 3
+const DEFAULT_BASE = 'https://router.requesty.ai/v1'
+const DEFAULT_MODEL = 'novita/ling-3.1-flash'
+/** Ling hybrid reasoning burns max_tokens before content — keep retries low. */
+const RETRIES = 1
 
 export function getMimoConfig() {
   const apiKey =
+    Deno.env.get('REQUESTY_API_KEY') ||
+    Deno.env.get('AI_GATEWAY_API_KEY') ||
     Deno.env.get('TOKENHARBOR_API_KEY') ||
     Deno.env.get('TOKEN_HARBOR_API_KEY')
   const baseURL = (
+    Deno.env.get('REQUESTY_BASE_URL') ||
+    Deno.env.get('AI_GATEWAY_BASE_URL') ||
     Deno.env.get('TOKEN_HARBOR_BASE_URL') ||
     Deno.env.get('TOKENHARBOR_BASE_URL') ||
     DEFAULT_BASE
   ).replace(/\/$/, '')
   const model =
+    Deno.env.get('REQUESTY_MODEL') ||
+    Deno.env.get('AI_GATEWAY_MODEL') ||
     Deno.env.get('MIMO_MODEL') ||
     Deno.env.get('TOKENHARBOR_MODEL') ||
     DEFAULT_MODEL
-  return { apiKey, baseURL, model }
+  /**
+   * Requesty: reasoning_effort none|min disables / minimizes chain-of-thought.
+   * Ling defaults to thinking ON; without this, max_tokens often fills with
+   * reasoning_content and visible content stays empty → slow retries.
+   */
+  const reasoningEffort = (
+    Deno.env.get('REQUESTY_REASONING_EFFORT') ||
+    Deno.env.get('AI_REASONING_EFFORT') ||
+    'none'
+  ).trim()
+  return { apiKey, baseURL, model, reasoningEffort }
 }
 
 function sleep(ms: number) {
@@ -216,15 +233,17 @@ export async function callMimo(
   messages: MimoMessage[],
   opts: { json?: boolean; temperature?: number; maxTokens?: number } = {},
 ): Promise<MimoResult> {
-  const { apiKey, baseURL, model } = getMimoConfig()
+  const { apiKey, baseURL, model, reasoningEffort } = getMimoConfig()
   if (!apiKey) {
     throw new Error(
-      'TOKENHARBOR_API_KEY (or TOKEN_HARBOR_API_KEY) is not set in Edge secrets',
+      'REQUESTY_API_KEY is not set in Edge secrets (AI_GATEWAY_* / TOKENHARBOR_* also accepted)',
     )
   }
 
   let lastErr = 'MiMo failed'
   let useJson = !!opts.json
+  // First attempt uses caller budget; if thinking ate it, one bump retry.
+  let maxTokens = opts.maxTokens ?? 2500
 
   for (let attempt = 0; attempt <= RETRIES; attempt += 1) {
     const res = await fetch(`${baseURL}/chat/completions`, {
@@ -236,7 +255,14 @@ export async function callMimo(
       body: JSON.stringify({
         model,
         temperature: opts.temperature ?? 0.3,
-        max_tokens: opts.maxTokens ?? 2500,
+        max_tokens: maxTokens,
+        // Disable hybrid CoT by default (Requesty + Novita Ling).
+        ...(reasoningEffort
+          ? { reasoning_effort: reasoningEffort }
+          : {}),
+        enable_thinking: reasoningEffort === 'none' || reasoningEffort === 'min'
+          ? false
+          : undefined,
         ...(useJson ? { response_format: { type: 'json_object' } } : {}),
         messages,
       }),
@@ -251,7 +277,7 @@ export async function callMimo(
       } catch {
         lastErr = `MiMo returned non-JSON body: ${body.slice(0, 300)}`
         if (attempt < RETRIES) {
-          await sleep(1200 * (attempt + 1))
+          await sleep(400 * (attempt + 1))
           continue
         }
         throw new Error(lastErr)
@@ -267,9 +293,13 @@ export async function callMimo(
       }
 
       lastErr = `Empty MiMo response — ${extracted.detail}`
-      // Free tier sometimes returns empty under load; retry
-      if (attempt < RETRIES) {
-        await sleep(1500 * (attempt + 1))
+      // length + empty usually means reasoning filled the budget
+      if (
+        attempt < RETRIES &&
+        (extracted.finishReason === 'length' || /empty content/i.test(extracted.detail))
+      ) {
+        maxTokens = Math.min(Math.max(maxTokens * 2, maxTokens + 800), 6000)
+        await sleep(200)
         continue
       }
       throw new Error(lastErr)

@@ -21,10 +21,12 @@ import {
 } from '@/lib/quizResults'
 import { listDueForBook, pullSrsForBook, type SrsItem } from '@/lib/srs'
 import GroupStudyPack from '@/components/GroupStudyPack'
+import UnitScopeDialog from '@/components/UnitScopeDialog'
 import {
   fetchMyMembership,
   fetchStudyGroupByBook,
 } from '@/lib/studyGroup'
+import { stashUnitScope, type UnitScope } from '@/lib/unitScope'
 
 function statusLabel(status: string) {
   if (status === 'ready') return 'hazır'
@@ -53,6 +55,7 @@ export default function BookPage() {
   const queryClient = useQueryClient()
   useStudySession(bookId)
   const [shareOpen, setShareOpen] = useState(false)
+  const [scopeOpen, setScopeOpen] = useState(false)
   const [unitError, setUnitError] = useState<string | null>(null)
   const [progressTick, setProgressTick] = useState(0)
   const [weak, setWeak] = useState<WeakChapter[]>([])
@@ -101,20 +104,29 @@ export default function BookPage() {
   }, [chaptersQuery.data, progressTick, bookId])
 
   const unitsMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (scope: UnitScope) => {
       if (!bookId || !bookQuery.data) throw new Error('Kitap yok')
+      stashUnitScope(bookId, scope)
       await processBookPipeline({
         bookId,
         bookTitle: bookQuery.data.title,
+        scope,
       })
     },
     onSuccess: async () => {
       setUnitError(null)
+      setScopeOpen(false)
       await queryClient.invalidateQueries({ queryKey: ['book', bookId] })
       await queryClient.invalidateQueries({ queryKey: ['chapters', bookId] })
     },
     onError: (err) => setUnitError(friendlyAiError(err)),
   })
+
+  function startUnits(scope: UnitScope) {
+    setUnitError(null)
+    navigate(`/processing/${bookId}`)
+    unitsMutation.mutate(scope)
+  }
 
   const chapters = chaptersQuery.data ?? []
   const ready = chapters.filter((c) => c.status === 'ready').length
@@ -174,19 +186,18 @@ export default function BookPage() {
             <Link to={`/books/${bookId}/read`} className="btn-primary text-sm">
               PDF’den oku
             </Link>
-            {chapters.length === 0 && (
-              <button
-                type="button"
-                className="btn-ghost text-sm"
-                disabled={isProcessing}
-                onClick={() => {
-                  navigate(`/processing/${bookId}`)
-                  unitsMutation.mutate()
-                }}
-              >
-                {isProcessing ? 'Üniteler oluşuyor…' : 'Konuları oluştur'}
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn-ghost text-sm"
+              disabled={isProcessing}
+              onClick={() => setScopeOpen(true)}
+            >
+              {isProcessing
+                ? 'Üniteler oluşuyor…'
+                : chapters.length === 0
+                  ? 'Konuları oluştur'
+                  : 'Sayfa aralığı ekle'}
+            </button>
             {bookQuery.data && (
               <button
                 type="button"
@@ -197,7 +208,45 @@ export default function BookPage() {
               </button>
             )}
           </div>
-          {unitError && <div className="alert-error mt-3 text-sm">{unitError}</div>}
+          {bookQuery.data?.status === 'failed' ? (
+            <div className="alert-error mt-3 space-y-2 text-sm">
+              <p className="font-semibold">Ünite ayırma başarısız</p>
+              {bookQuery.data.error_message ? (
+                <p className="text-xs whitespace-pre-wrap break-words opacity-95">
+                  {bookQuery.data.error_message}
+                </p>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-primary text-xs"
+                  disabled={isProcessing}
+                  onClick={() => setScopeOpen(true)}
+                >
+                  {isProcessing ? 'Yeniden…' : 'Tekrar dene'}
+                </button>
+                <Link
+                  to={`/books/${bookId}/read`}
+                  className="btn-ghost text-xs"
+                >
+                  PDF’den devam
+                </Link>
+              </div>
+            </div>
+          ) : null}
+          {unitError ? (
+            <div className="alert-error mt-3 flex flex-wrap items-center gap-2 text-sm">
+              <span>{unitError}</span>
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                disabled={isProcessing}
+                onClick={() => setScopeOpen(true)}
+              >
+                Tekrar dene
+              </button>
+            </div>
+          ) : null}
           {shareOpen && bookQuery.data && (
             <div className="book-hub__share surface-panel mt-4 max-w-lg space-y-3 p-4">
               <ShareBookButton book={bookQuery.data} />
@@ -322,10 +371,7 @@ export default function BookPage() {
                     type="button"
                     className="btn-ghost text-sm"
                     disabled={isProcessing}
-                    onClick={() => {
-                      navigate(`/processing/${bookId}`)
-                      unitsMutation.mutate()
-                    }}
+                    onClick={() => setScopeOpen(true)}
                   >
                     {isProcessing ? 'Oluşuyor…' : 'Konuları oluştur'}
                   </button>
@@ -335,6 +381,15 @@ export default function BookPage() {
           </ul>
         </section>
       </div>
+
+      <UnitScopeDialog
+        open={scopeOpen}
+        maxPage={bookQuery.data?.total_pages || 1}
+        hasUnits={chapters.length > 0}
+        busy={isProcessing}
+        onClose={() => setScopeOpen(false)}
+        onConfirm={startUnits}
+      />
     </AppShell>
   )
 }

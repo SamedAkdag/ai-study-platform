@@ -9,6 +9,7 @@ import {
 import type { QuizItem } from '@/types/database'
 import { friendlyAiError } from '@/lib/errors'
 import StudyMarkdown from '@/components/StudyMarkdown'
+import LessonWaitMood from '@/components/LessonWaitMood'
 
 type Props = {
   title: string
@@ -98,6 +99,11 @@ export default function StudyGuidePanel({
               {genMutation.isPending ? 'Üretiliyor…' : 'Kılavuzu yenile'}
             </button>
           </div>
+          {genMutation.isPending ? (
+            <div className="mb-2">
+              <LessonWaitMood kind="guide" size="compact" />
+            </div>
+          ) : null}
           {genMutation.isError ? (
             <p className="muted text-xs mb-2" role="alert">
               {friendlyAiError(genMutation.error)} — taslak gösteriliyor.

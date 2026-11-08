@@ -1,22 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import MindMapPanel from '@/components/MindMapPanel'
-import {
-  buildAudioOverview,
-  generateAudioOverview,
-  loadCachedAudioOverview,
-  type AudioOverviewScript,
-} from '@/lib/audioOverview'
+import LessonWaitMood from '@/components/LessonWaitMood'
 import { friendlyAiError } from '@/lib/errors'
-import type { MindMapData } from '@/types/database'
+import { warmEmaSpeak } from '@/lib/emaSpeak'
+import {
+  generateLessonScript,
+  loadCachedLessonScript,
+  mergeNarrationsOntoMap,
+  narrationCoverage,
+  stitchLessonTranscript,
+} from '@/lib/lessonScript'
 import { stopSpeech } from '@/lib/tts'
+import type { MindMapData } from '@/types/database'
+import type { NarratedMindMapData } from '@/lib/mindmapLesson/types'
 
 type Props = {
   chapterId: string
   title: string
   summary?: string | null
   keyConcepts?: string[] | null
-  /** Chapter notes — used to generate hoca lecture, not for map tables */
+  /** Chapter notes — source for map-locked teacher speech */
   markdown?: string | null
   mindMap: MindMapData
   onRefreshMap?: () => void
@@ -25,7 +29,7 @@ type Props = {
 
 /**
  * Dinle: full-bleed harita dersi çalışma alanı (PDF yok).
- * “Tam sayfa” ile tüm viewport’u kaplar (OS fullscreen da dener).
+ * AI produces per-node narrations locked to the mind map; EMA warms on open.
  */
 export default function ListenLessonStudio({
   chapterId,
@@ -40,39 +44,64 @@ export default function ListenLessonStudio({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [pageFull, setPageFull] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
-  const inputKey = useMemo(
-    () => ({ title, summary, keyConcepts, markdown }),
-    [title, summary, keyConcepts, markdown],
-  )
-  const fallback = useMemo(() => buildAudioOverview(inputKey), [inputKey])
-  const [script, setScript] = useState<AudioOverviewScript>(() => {
-    const cached = loadCachedAudioOverview(inputKey)
-    return cached && cached.narration.length >= 120 ? cached : fallback
+  const [narrated, setNarrated] = useState<NarratedMindMapData | null>(() => {
+    const cached = loadCachedLessonScript({
+      chapterId,
+      title,
+      mindMap,
+      markdown,
+    })
+    return cached?.mindMap ?? null
   })
 
+  const mapKey = useMemo(
+    () =>
+      `${mindMap.central}::${mindMap.branches.map((b) => b.label).join('|')}`,
+    [mindMap],
+  )
+
   useEffect(() => {
-    const cached = loadCachedAudioOverview(inputKey)
-    setScript(cached && cached.narration.length >= 120 ? cached : fallback)
+    const cached = loadCachedLessonScript({
+      chapterId,
+      title,
+      mindMap,
+      markdown,
+    })
+    setNarrated(cached?.mindMap ?? null)
     stopSpeech()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, summary, markdown, fallback])
+  }, [chapterId, title, mapKey, markdown])
 
-  const genMutation = useMutation({
+  // Warm EMA as soon as Dinle opens so “Dersi Başlat” is not a cold download.
+  useEffect(() => {
+    void warmEmaSpeak()
+  }, [chapterId])
+
+  const scriptMutation = useMutation({
     mutationFn: (force: boolean) =>
-      generateAudioOverview({ ...inputKey, force }),
-    onSuccess: (next) => setScript(next),
+      generateLessonScript({
+        chapterId,
+        title,
+        summary,
+        keyConcepts,
+        markdown,
+        mindMap,
+        force,
+      }),
+    onSuccess: (next) => setNarrated(next.mindMap),
   })
 
   const autoTriedKey = useRef('')
   useEffect(() => {
-    if (script.source === 'ai' && script.narration.length >= 400) return
-    if (genMutation.isPending) return
-    const key = `${title}::${(markdown || '').slice(0, 80)}`
+    if (narrated && narrationCoverage(narrated) >= 0.5) return
+    if (scriptMutation.isPending) return
+    if (mindMap.branches.length < 2) return
+    const key = `${chapterId}::${mapKey}::${(markdown || '').slice(0, 80)}`
     if (autoTriedKey.current === key) return
     autoTriedKey.current = key
-    genMutation.mutate(false)
+    scriptMutation.mutate(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, markdown, script.source])
+  }, [chapterId, mapKey, markdown, narrated])
 
   useEffect(() => () => stopSpeech(), [])
 
@@ -127,10 +156,20 @@ export default function ListenLessonStudio({
     }
   }
 
-  const lectureMarkdown =
-    script.narration.trim().length >= 80 ? script.narration : markdown || ''
+  const lessonMap = useMemo(
+    () => mergeNarrationsOntoMap(mindMap, narrated),
+    [mindMap, narrated],
+  )
 
-  const paragraphs = script.narration
+  const transcript =
+    narrated && narrationCoverage(narrated) >= 0.35
+      ? stitchLessonTranscript(narrated)
+      : markdown || ''
+
+  const scriptReady =
+    !!narrated && narrationCoverage(narrated) >= 0.5 && !scriptMutation.isPending
+
+  const paragraphs = transcript
     .split(/\n{2,}/)
     .map((p) => p.trim())
     .filter(Boolean)
@@ -144,14 +183,15 @@ export default function ListenLessonStudio({
       <div className="listen-lesson">
         <header className="listen-lesson__head">
           <div className="listen-lesson__intro">
-            <p className="listen-lesson__eyebrow">Dinle · çalışma alanı</p>
+            <p className="listen-lesson__eyebrow">Dinle · hoca harita turu</p>
             <h2 className="listen-lesson__title">
               {title?.trim() || 'Hoca harita turu'}
             </h2>
             {!pageFull ? (
               <p className="listen-lesson__lead">
-                Karar ağacında düğüm düğüm anlatır. Sor, dinle, kaldığın yerden
-                devam et — tam sayfa ile tüm ekranı kaplayabilirsin.
+                {scriptReady
+                  ? 'Ders metni düğümlere kilitli — başlat, haritada dinle, sor, devam et.'
+                  : 'Karar ağacında düğüm düğüm anlatır. Script hazırlanınca tek tıkla başla.'}
               </p>
             ) : null}
           </div>
@@ -175,10 +215,12 @@ export default function ListenLessonStudio({
             <button
               type="button"
               className="btn-ghost text-xs"
-              disabled={genMutation.isPending}
-              onClick={() => genMutation.mutate(true)}
+              disabled={scriptMutation.isPending}
+              onClick={() => scriptMutation.mutate(true)}
             >
-              {genMutation.isPending ? 'Anlatım yazılıyor…' : 'Anlatımı yenile'}
+              {scriptMutation.isPending
+                ? 'Ders yazılıyor…'
+                : 'Dersi yenile'}
             </button>
             <button
               type="button"
@@ -190,27 +232,34 @@ export default function ListenLessonStudio({
           </div>
         </header>
 
-        {genMutation.isPending && script.source !== 'ai' ? (
-          <p className="muted text-xs listen-lesson__status">
-            Hoca anlatımı hazırlanıyor — harita turu taslak metinle başlayabilir…
+        {scriptReady ? (
+          <p className="muted text-xs listen-lesson__status listen-lesson__status--ready">
+            Ders hazır — aşağıdan «Dersi Başlat».
           </p>
         ) : null}
-        {genMutation.isError ? (
+        {scriptMutation.isError ? (
           <p className="listen-lesson__error text-xs" role="alert">
-            {friendlyAiError(genMutation.error)} — taslak ile devam.
+            {friendlyAiError(scriptMutation.error)} — notlardan doldurulmuş
+            anlatımla devam.
           </p>
         ) : null}
 
         <div className="listen-lesson__stage">
+          {scriptMutation.isPending && !scriptReady ? (
+            <div className="listen-lesson__wait-overlay">
+              <LessonWaitMood kind="script" size="stage" />
+            </div>
+          ) : null}
           <MindMapPanel
             variant="lesson"
-            data={mindMap}
+            data={lessonMap}
             title={title}
             chapterId={chapterId}
-            markdown={lectureMarkdown}
+            markdown={transcript || markdown}
             defaultCollapsed={false}
             onRefreshMap={onRefreshMap}
             refreshingMap={refreshingMap}
+            lessonScriptReady={scriptReady}
           />
         </div>
 
