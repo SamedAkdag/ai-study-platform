@@ -1,11 +1,50 @@
+function formatTopicEdgePayload(parsed: {
+  error?: unknown
+  message?: unknown
+  step?: unknown
+  detail?: unknown
+}): string | null {
+  const errText =
+    typeof parsed.error === 'string' && parsed.error.trim()
+      ? parsed.error.trim()
+      : parsed.error &&
+          typeof parsed.error === 'object' &&
+          parsed.error !== null &&
+          'message' in parsed.error &&
+          typeof (parsed.error as { message: unknown }).message === 'string'
+        ? String((parsed.error as { message: string }).message)
+        : typeof parsed.message === 'string' && parsed.message.trim()
+          ? parsed.message.trim()
+          : null
+  if (!errText) return null
+  const step =
+    typeof parsed.step === 'string' && parsed.step.trim()
+      ? parsed.step.trim()
+      : ''
+  const detail =
+    typeof parsed.detail === 'string' && parsed.detail.trim()
+      ? parsed.detail.trim()
+      : ''
+  return [step ? `[${step}]` : '', errText, detail ? `Detail: ${detail}` : '']
+    .filter(Boolean)
+    .join(' ')
+}
+
 /** Pull a readable message from supabase.functions.invoke failures. */
 export async function extractFunctionsError(
   error: unknown,
   data?: unknown,
 ): Promise<string> {
-  if (data && typeof data === 'object' && data !== null && 'error' in data) {
-    const e = (data as { error: unknown }).error
-    if (typeof e === 'string' && e.trim()) return e
+  if (data && typeof data === 'object' && data !== null) {
+    const formatted = formatTopicEdgePayload(
+      data as {
+        error?: unknown
+        message?: unknown
+        step?: unknown
+        detail?: unknown
+      },
+    )
+    if (formatted) return formatted
   }
 
   if (!(error instanceof Error)) {
@@ -24,22 +63,11 @@ export async function extractFunctionsError(
       const parsed = JSON.parse(raw) as {
         error?: unknown
         message?: unknown
+        step?: unknown
+        detail?: unknown
       }
-      if (typeof parsed.error === 'string' && parsed.error.trim()) {
-        return parsed.error
-      }
-      if (
-        parsed.error &&
-        typeof parsed.error === 'object' &&
-        parsed.error !== null &&
-        'message' in parsed.error &&
-        typeof (parsed.error as { message: unknown }).message === 'string'
-      ) {
-        return (parsed.error as { message: string }).message
-      }
-      if (typeof parsed.message === 'string' && parsed.message.trim()) {
-        return parsed.message
-      }
+      const formatted = formatTopicEdgePayload(parsed)
+      if (formatted) return formatted
     } catch {
       /* not JSON */
     }

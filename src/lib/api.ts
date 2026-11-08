@@ -51,12 +51,14 @@ export async function createBookRecord(input: {
   return data
 }
 
-/** Chat goal → topic units (no PDF). Fills chapters.page_text as SOURCE. */
+/** Chat brief → agentic topic units (no PDF). Fills chapters.page_text as SOURCE. */
 export async function createTopicStudy(input: {
   bookId: string
   goal: string
   level?: string
   depth?: 'one' | 'path'
+  minutes?: number
+  purpose?: 'exam' | 'understand' | 'homework' | 'review'
   subject?: string | null
 }) {
   const { data, error } = await supabase.functions.invoke('create-topic-study', {
@@ -65,6 +67,8 @@ export async function createTopicStudy(input: {
       goal: input.goal,
       level: input.level || 'genel',
       depth: input.depth || 'one',
+      minutes: input.minutes ?? 30,
+      purpose: input.purpose || 'understand',
       subject: input.subject || undefined,
     },
   })
@@ -73,7 +77,14 @@ export async function createTopicStudy(input: {
     throw new Error(await extractFunctionsError(error, data))
   }
   if (data?.error) {
-    throw new Error(String(data.error))
+    const step = typeof data.step === 'string' ? data.step : ''
+    const detail = typeof data.detail === 'string' ? data.detail : ''
+    const model = typeof data.model === 'string' ? data.model : ''
+    throw new Error(
+      [step ? `[${step}]` : '', String(data.error), detail ? `Detail: ${detail}` : '', model ? `Model: ${model}` : '']
+        .filter(Boolean)
+        .join(' '),
+    )
   }
   return data as {
     ok: boolean

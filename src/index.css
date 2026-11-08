@@ -11954,13 +11954,13 @@ html[data-theme='night'] .pdf-insert .study-callout {
 .upload-preview {
   display: flex;
   flex-direction: column;
-  gap: 1.75rem;
-  padding-top: 0.35rem;
+  gap: 1.35rem;
+  padding-top: 0.5rem;
   border-top: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
 }
 
 .upload-preview__kicker {
-  margin: 0;
+  margin: 0 0 0.15rem;
   text-align: center;
   font-size: 0.72rem;
   font-weight: 750;
@@ -11969,15 +11969,138 @@ html[data-theme='night'] .pdf-insert .study-callout {
   color: var(--accent-deep);
 }
 
-.upload-preview .read-lobby {
+.upload-preview__block {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-radius: 1.15rem;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  background: var(--paper);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.75) inset,
+    0 14px 34px rgba(28, 36, 44, 0.06);
+  overflow: hidden;
+}
+
+.upload-preview__block-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent-soft) 55%, transparent),
+      transparent 72%
+    ),
+    color-mix(in srgb, var(--paper) 88%, #f3f0e8);
+}
+
+.upload-preview__step {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: color-mix(in srgb, #fff 70%, var(--accent-soft));
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--accent-deep);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.upload-preview__block-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+
+.upload-preview__block-eye {
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+}
+
+.upload-preview__block-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.upload-preview__block-body {
+  padding: 1rem 0.95rem 1.15rem;
+}
+
+.upload-preview__block--pdf {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
+}
+
+.upload-preview__block--read {
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--line));
+}
+
+.upload-preview__block--practice {
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--line));
+}
+
+.upload-preview__block--pdf .upload-preview__block-bar {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent-soft) 70%, transparent),
+      transparent 78%
+    ),
+    color-mix(in srgb, var(--paper) 82%, #efebe3);
+}
+
+.upload-preview__block--practice .upload-preview__block-bar {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent-soft) 38%, transparent),
+      transparent 70%
+    ),
+    color-mix(in srgb, var(--paper) 92%, #f6f3ec);
+}
+
+/* Inside framed blocks, lobby headers stay left-aligned and quieter */
+.upload-preview__block .read-lobby {
   margin: 0;
 }
 
-.upload-preview .read-lobby__head {
+.upload-preview__block .read-lobby__head {
   max-width: none;
-  text-align: center;
-  margin-left: auto;
-  margin-right: auto;
+  text-align: left;
+  margin: 0 0 0.95rem;
+}
+
+.upload-preview__block .read-lobby__eyebrow {
+  display: none;
+}
+
+.upload-preview__block .read-lobby__title {
+  font-size: clamp(1.15rem, 2vw, 1.4rem);
+}
+
+.upload-preview__block .read-lobby__lead {
+  font-size: 0.88rem;
+}
+
+.upload-preview__block .pdf-desk-demo__status {
+  text-align: left;
 }
 
 .read-lobby__card--static {
@@ -12585,6 +12708,14 @@ html[data-theme='night'] .pdf-insert .study-callout {
   gap: 0.4rem;
 }
 
+.topic-chat__chips--wrap {
+  gap: 0.45rem;
+}
+
+.topic-chat__hint {
+  margin: 0.15rem 0 0;
+}
+
 .topic-chat__choices {
   display: grid;
   grid-template-columns: 1fr;
@@ -12707,6 +12838,8 @@ html[data-theme='night'] .pdf-insert .study-callout {
   background: color-mix(in srgb, #c44 12%, var(--paper));
   color: #8a1f1f;
   font-size: 0.85rem;
+  white-space: pre-wrap;
+  line-height: 1.45;
 }
 
 @media (max-width: 560px) {

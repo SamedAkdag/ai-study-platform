@@ -1,6 +1,6 @@
-// Requesty router (OpenAI-compatible Chat Completions)
-// Docs: https://router.requesty.ai/v1  ·  model novita/ling-3.1-flash
-// Secrets: REQUESTY_API_KEY (AI_GATEWAY_* / TOKENHARBOR_* still accepted)
+// Token Harbor — Xiaomi MiMo (OpenAI-compatible Chat Completions)
+// Docs: https://tokenharbor.ai/v1  ·  model mimo-v2.6-flash:free
+// Secrets: TOKENHARBOR_API_KEY (REQUESTY_* / AI_GATEWAY_* still accepted as fallback)
 
 /** OpenAI-style text or multimodal content parts (image_url + text). */
 export type MimoContentPart =
@@ -12,34 +12,36 @@ export type MimoMessage = {
   content: string | MimoContentPart[]
 }
 
-const DEFAULT_BASE = 'https://router.requesty.ai/v1'
-const DEFAULT_MODEL = 'novita/ling-3.1-flash'
-/** Ling hybrid reasoning burns max_tokens before content — keep retries low. */
+const DEFAULT_BASE = 'https://tokenharbor.ai/v1'
+const DEFAULT_MODEL = 'mimo-v2.6-flash:free'
+/** Keep retries low — empty content / length usually needs a token bump, not loops. */
 const RETRIES = 1
+/** One cool-down retry for 429 — many waits blow Edge wall-clock. */
+const RATE_LIMIT_RETRIES = 1
 
 export function getMimoConfig() {
+  // Prefer Token Harbor (MiMo) — Requesty only as fallback if TH unset.
   const apiKey =
-    Deno.env.get('REQUESTY_API_KEY') ||
-    Deno.env.get('AI_GATEWAY_API_KEY') ||
     Deno.env.get('TOKENHARBOR_API_KEY') ||
-    Deno.env.get('TOKEN_HARBOR_API_KEY')
+    Deno.env.get('TOKEN_HARBOR_API_KEY') ||
+    Deno.env.get('AI_GATEWAY_API_KEY') ||
+    Deno.env.get('REQUESTY_API_KEY')
   const baseURL = (
-    Deno.env.get('REQUESTY_BASE_URL') ||
-    Deno.env.get('AI_GATEWAY_BASE_URL') ||
-    Deno.env.get('TOKEN_HARBOR_BASE_URL') ||
     Deno.env.get('TOKENHARBOR_BASE_URL') ||
+    Deno.env.get('TOKEN_HARBOR_BASE_URL') ||
+    Deno.env.get('AI_GATEWAY_BASE_URL') ||
+    Deno.env.get('REQUESTY_BASE_URL') ||
     DEFAULT_BASE
   ).replace(/\/$/, '')
   const model =
-    Deno.env.get('REQUESTY_MODEL') ||
-    Deno.env.get('AI_GATEWAY_MODEL') ||
-    Deno.env.get('MIMO_MODEL') ||
     Deno.env.get('TOKENHARBOR_MODEL') ||
+    Deno.env.get('MIMO_MODEL') ||
+    Deno.env.get('AI_GATEWAY_MODEL') ||
+    Deno.env.get('REQUESTY_MODEL') ||
     DEFAULT_MODEL
   /**
-   * Requesty: reasoning_effort none|min disables / minimizes chain-of-thought.
-   * Ling defaults to thinking ON; without this, max_tokens often fills with
-   * reasoning_content and visible content stays empty → slow retries.
+   * Some routers (e.g. Requesty/Ling) use reasoning_effort.
+   * Token Harbor MiMo ignores unknown fields; keep default none.
    */
   const reasoningEffort = (
     Deno.env.get('REQUESTY_REASONING_EFFORT') ||
@@ -63,7 +65,16 @@ function parseRetryMs(body: string): number {
 
 function isRateLimited(status: number, body: string): boolean {
   if (status === 429) return true
-  return /rate_limit|quota|too many requests/i.test(body)
+  // Avoid bare "quota" — matches billing docs / unrelated JSON keys.
+  return /rate_limit|rate limit|too many requests|rpm|tpm|insufficient_quota|tokens per (minute|day)/i.test(
+    body,
+  )
+}
+
+function isHardQuota(body: string): boolean {
+  return /insufficient_quota|billing|payment.?required|credit|out of credits/i.test(
+    body,
+  )
 }
 
 export type TokenUsage = {
@@ -120,14 +131,6 @@ function readCachedTokens(u: Record<string, unknown>): number {
     const n = Number(d.cached_tokens ?? d.cache_read_tokens ?? 0)
     if (Number.isFinite(n) && n > 0) return Math.round(n)
   }
-
-  const inputDetails = u.input_tokens_details
-  if (inputDetails && typeof inputDetails === 'object') {
-    const d = inputDetails as Record<string, unknown>
-    const n = Number(d.cached_tokens ?? 0)
-    if (Number.isFinite(n) && n > 0) return Math.round(n)
-  }
-
   return 0
 }
 
@@ -135,108 +138,88 @@ export function extractTokenUsage(
   payload: unknown,
   fallback: TokenUsage,
 ): TokenUsage {
-  const u = (payload as { usage?: Record<string, unknown> } | null)?.usage
+  if (!payload || typeof payload !== 'object') return fallback
+  const u = (payload as { usage?: Record<string, unknown> }).usage
   if (!u || typeof u !== 'object') return fallback
-
-  const prompt = Number(
-    u.prompt_tokens ?? u.input_tokens ?? u.promptTokens ?? 0,
-  )
-  const completion = Number(
-    u.completion_tokens ?? u.output_tokens ?? u.completionTokens ?? 0,
-  )
-  const total = Number(u.total_tokens ?? u.totalTokens ?? 0)
-  const cached_tokens = Math.min(
-    Math.max(0, readCachedTokens(u)),
-    Math.max(0, Math.round(prompt) || 0) || Number.POSITIVE_INFINITY,
-  )
-
+  const prompt = Number(u.prompt_tokens ?? u.input_tokens ?? 0)
+  const completion = Number(u.completion_tokens ?? u.output_tokens ?? 0)
+  const total = Number(u.total_tokens ?? prompt + completion)
   if (!Number.isFinite(prompt) && !Number.isFinite(completion)) return fallback
-  const prompt_tokens = Math.max(0, Math.round(prompt) || 0)
-  const completion_tokens = Math.max(0, Math.round(completion) || 0)
-  const total_tokens =
-    Math.max(0, Math.round(total) || 0) || prompt_tokens + completion_tokens
-
-  if (prompt_tokens === 0 && completion_tokens === 0 && total_tokens === 0) {
-    return fallback
-  }
-
   return {
-    prompt_tokens,
-    completion_tokens,
-    total_tokens,
-    cached_tokens: Number.isFinite(cached_tokens)
-      ? Math.min(cached_tokens, prompt_tokens)
-      : 0,
+    prompt_tokens: Math.max(0, Math.round(prompt || 0)),
+    completion_tokens: Math.max(0, Math.round(completion || 0)),
+    total_tokens: Math.max(0, Math.round(total || prompt + completion)),
+    cached_tokens: readCachedTokens(u),
     estimated: false,
   }
 }
 
-/** Pull assistant text from various OpenAI-compatible shapes. */
 function extractMessageText(payload: unknown): {
   text: string
-  finishReason: string | null
   detail: string
+  finishReason: string | null
 } {
-  const p = payload as {
+  const root = payload as {
     choices?: Array<{
       finish_reason?: string
       message?: {
         content?: unknown
-        refusal?: unknown
-        reasoning?: unknown
         reasoning_content?: unknown
       }
-      text?: unknown
     }>
-    error?: { message?: string }
   }
-
-  const choice = p?.choices?.[0]
+  const choice = root?.choices?.[0]
   const finishReason = choice?.finish_reason ?? null
-  const msg = choice?.message
+  const message = choice?.message
+  if (!message) {
+    return { text: '', detail: 'no message in choices[0]', finishReason }
+  }
 
-  const candidates: unknown[] = [
-    msg?.content,
-    choice?.text,
-    msg?.refusal,
-  ]
+  const content = message.content
+  if (typeof content === 'string' && content.trim()) {
+    return { text: content.trim(), detail: 'ok', finishReason }
+  }
+  if (Array.isArray(content)) {
+    const joined = content
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part && typeof part === 'object' && 'text' in part) {
+          return String((part as { text?: unknown }).text || '')
+        }
+        return ''
+      })
+      .join('')
+      .trim()
+    if (joined) return { text: joined, detail: 'ok', finishReason }
+  }
 
-  for (const c of candidates) {
-    if (typeof c === 'string' && c.trim()) {
-      return { text: c.trim(), finishReason, detail: 'ok' }
-    }
-    // Some providers return content as [{type:'text', text:'...'}]
-    if (Array.isArray(c)) {
-      const joined = c
-        .map((part) => {
-          if (typeof part === 'string') return part
-          if (part && typeof part === 'object' && 'text' in part) {
-            return String((part as { text?: unknown }).text ?? '')
-          }
-          return ''
-        })
-        .join('')
-        .trim()
-      if (joined) return { text: joined, finishReason, detail: 'ok' }
+  const reasoning = message.reasoning_content
+  if (typeof reasoning === 'string' && reasoning.trim()) {
+    return {
+      text: '',
+      detail: 'empty content (reasoning only)',
+      finishReason,
     }
   }
 
-  const snippet = JSON.stringify(payload).slice(0, 400)
-  return {
-    text: '',
-    finishReason,
-    detail: `empty content (finish_reason=${finishReason ?? 'null'}) payload=${snippet}`,
-  }
+  return { text: '', detail: 'empty content', finishReason }
 }
 
+/**
+ * Chat Completions against Token Harbor (or configured OpenAI-compatible base).
+ */
 export async function callMimo(
   messages: MimoMessage[],
-  opts: { json?: boolean; temperature?: number; maxTokens?: number } = {},
+  opts: {
+    json?: boolean
+    temperature?: number
+    maxTokens?: number
+  } = {},
 ): Promise<MimoResult> {
   const { apiKey, baseURL, model, reasoningEffort } = getMimoConfig()
   if (!apiKey) {
     throw new Error(
-      'REQUESTY_API_KEY is not set in Edge secrets (AI_GATEWAY_* / TOKENHARBOR_* also accepted)',
+      'TOKENHARBOR_API_KEY is not set in Edge secrets (AI_GATEWAY_* / REQUESTY_* also accepted)',
     )
   }
 
@@ -244,10 +227,11 @@ export async function callMimo(
   let useJson = !!opts.json
   // First attempt uses caller budget; if thinking ate it, one bump retry.
   let maxTokens = opts.maxTokens ?? 2500
-  // Novita Ling via Requesty often 400s on response_format / enable_thinking.
+  // Some providers 400 on response_format / enable_thinking.
   let stripThinkingFlags = false
+  let rateLimitTries = 0
 
-  for (let attempt = 0; attempt <= RETRIES; attempt += 1) {
+  for (let attempt = 0; attempt <= RETRIES + RATE_LIMIT_RETRIES; attempt += 1) {
     const payloadBody: Record<string, unknown> = {
       model,
       temperature: opts.temperature ?? 0.3,
@@ -310,8 +294,7 @@ export async function callMimo(
       throw new Error(lastErr)
     }
 
-    // Ling/Novita often returns opaque {"origin":"provider","message":"Bad Request"}
-    // for response_format json_object — same path PDF notes recover via llmCompleteJson.
+    // Some providers reject response_format json_object with opaque 400.
     if (useJson && (res.status === 400 || res.status === 422)) {
       console.warn(
         'Provider rejected JSON mode (or thinking flags); retrying plain chat',
@@ -322,8 +305,23 @@ export async function callMimo(
     }
 
     lastErr = `AI error ${res.status}: ${body}`
-    if (isRateLimited(res.status, body) && attempt < RETRIES) {
-      await sleep(parseRetryMs(body))
+
+    if (isHardQuota(body)) {
+      const err = new Error(
+        `AI_QUOTA: ${body.slice(0, 280) || 'insufficient_quota'}`,
+      )
+      ;(err as Error & { code?: string }).code = 'HARD_QUOTA'
+      throw err
+    }
+
+    if (isRateLimited(res.status, body) && rateLimitTries < RATE_LIMIT_RETRIES) {
+      rateLimitTries += 1
+      const wait = Math.min(Math.max(parseRetryMs(body), 3500), 12_000)
+      console.warn(
+        `Provider rate limit ${res.status} — wait ${wait}ms`,
+        body.slice(0, 200),
+      )
+      await sleep(wait)
       continue
     }
 

@@ -68,7 +68,9 @@ function parseRetryMs(body: string): number {
 
 function isRateLimited(status: number, body: string): boolean {
   if (status === 429) return true
-  return /rate_limit|quota|resource.?exhausted|tokens per day/i.test(body)
+  return /rate_limit|rate limit|too many requests|rpm|tpm|insufficient_quota|resource.?exhausted|tokens per (minute|day)/i.test(
+    body,
+  )
 }
 
 function isTransientGemini(status: number, body: string): boolean {

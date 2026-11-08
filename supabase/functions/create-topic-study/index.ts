@@ -1,4 +1,5 @@
-// Chat goal → topic book units (page_text SOURCE, no PDF).
+// Agentic topic study:
+//   brief → RESEARCH (concepts/links) → CLUSTER (code) → WRITE per unit
 // Secrets: REQUESTY_API_KEY (or AI_GATEWAY_* / TOKENHARBOR_*)
 
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
@@ -9,7 +10,39 @@ import {
   createUsageBag,
   logAiUsage,
   recordUsage,
+  type UsageBag,
 } from '../_shared/aiUsage.ts'
+import {
+  clusterResearchIntoUnits,
+  normalizeBatchWritten,
+  normalizeMinutes,
+  normalizePurpose,
+  normalizeResearch,
+  normalizeWrittenUnit,
+  planCapacity,
+  researchHeader,
+  researchSystemPrompt,
+  researchUserPrompt,
+  sanitizeText,
+  writeBatchSystemPrompt,
+  writeBatchUserPrompt,
+  writeUnitSystemPrompt,
+  writeUnitUserPrompt,
+  type TopicBriefIn,
+  type WrittenUnit,
+} from '../_shared/topicStudyAgent.ts'
+
+function writeMaxTokens(wordsMax: number, units: number): number {
+  if (units <= 1) {
+    return Math.min(2600, Math.max(1400, Math.round(wordsMax * 2.2)))
+  }
+  // One batched write for the path — keep under Edge + provider ceilings.
+  return Math.min(3800, 700 + units * Math.round(wordsMax * 1.8))
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms))
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -17,66 +50,20 @@ const corsHeaders = {
     'authorization, x-client-info, apikey, content-type',
 }
 
-type TopicChapter = {
-  title: string
-  summary: string
-  key_concepts: string[]
-  page_text: string
-}
-
-type TopicPlan = {
-  book_title: string
-  subject: string | null
-  chapters: TopicChapter[]
-}
-
-function sanitizeText(s: string, max = 24_000): string {
-  return s.replace(/\u0000/g, '').trim().slice(0, max)
-}
-
-function normalizePlan(raw: unknown, goal: string): TopicPlan {
-  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<
-    string,
-    unknown
-  >
-  const bookTitle =
-    sanitizeText(String(o.book_title || o.title || goal), 120) ||
-    goal.slice(0, 80) ||
-    'Konu çalışması'
-  const subjectRaw = String(o.subject || '').trim()
-  const subject = subjectRaw ? sanitizeText(subjectRaw, 80) : null
-
-  const list = Array.isArray(o.chapters) ? o.chapters : []
-  const chapters: TopicChapter[] = []
-  for (const item of list) {
-    if (!item || typeof item !== 'object') continue
-    const c = item as Record<string, unknown>
-    const title = sanitizeText(String(c.title || ''), 160)
-    const page_text = sanitizeText(String(c.page_text || c.source || ''), 20_000)
-    if (!title || page_text.length < 180) continue
-    const concepts = Array.isArray(c.key_concepts)
-      ? c.key_concepts
-          .map((x) => sanitizeText(String(x), 80))
-          .filter(Boolean)
-          .slice(0, 8)
-      : []
-    chapters.push({
-      title,
-      summary: sanitizeText(String(c.summary || ''), 600) || title,
-      key_concepts: concepts,
-      page_text,
+async function setProgress(
+  admin: ReturnType<typeof createClient>,
+  bookId: string,
+  step: string,
+) {
+  await admin
+    .from('books')
+    .update({
+      status: 'processing',
+      progress_step: step,
+      error_message: null,
+      source_kind: 'topic',
     })
-  }
-
-  if (chapters.length === 0) {
-    throw new Error('Konu planı boş döndü — tekrar dene')
-  }
-
-  return {
-    book_title: bookTitle,
-    subject,
-    chapters: chapters.slice(0, 6),
-  }
+    .eq('id', bookId)
 }
 
 serve(async (req) => {
@@ -85,6 +72,8 @@ serve(async (req) => {
   }
 
   let bookIdForFail: string | undefined
+  let pipelineStep = 'init'
+  const { model: mimoModel, baseURL } = getMimoConfig()
 
   try {
     const { apiKey: mimoKey } = getMimoConfig()
@@ -106,6 +95,8 @@ serve(async (req) => {
     const goal = sanitizeText(String(body?.goal || ''), 500)
     const level = sanitizeText(String(body?.level || 'genel'), 80) || 'genel'
     const depth = body?.depth === 'path' ? 'path' : 'one'
+    const minutes = normalizeMinutes(body?.minutes)
+    const purpose = normalizePurpose(body?.purpose)
     const subjectHint = sanitizeText(String(body?.subject || ''), 80)
 
     if (!bookId) {
@@ -121,10 +112,20 @@ serve(async (req) => {
       })
     }
 
+    const brief: TopicBriefIn = {
+      goal,
+      level,
+      depth,
+      minutes,
+      purpose,
+      subjectHint: subjectHint || undefined,
+    }
+    const capacity = planCapacity(brief)
+
     const admin = createClient(supabaseUrl, serviceKey)
     const { data: book, error: bookErr } = await admin
       .from('books')
-      .select('id, title, status')
+      .select('id, title, status, user_id')
       .eq('id', bookId)
       .maybeSingle()
 
@@ -135,68 +136,131 @@ serve(async (req) => {
       })
     }
 
-    await admin
-      .from('books')
-      .update({
-        status: 'processing',
-        progress_step: 'topic_planning',
-        error_message: null,
-        source_kind: 'topic',
-      })
-      .eq('id', bookId)
+    const usageBag: UsageBag = createUsageBag()
+    console.log('topic-study start', {
+      bookId,
+      model: mimoModel,
+      baseURL,
+      depth,
+      minutes,
+      purpose,
+      units: capacity.unitCount,
+    })
 
-    const unitCount = depth === 'path' ? '3 ile 5 arasında' : 'tam 1'
-    const system = `Sen Studium konu mimarısın. Kullanıcının öğrenme niyetinden PDF olmadan çalışılabilir üniteler üretirsin.
-Çıktı SADECE geçerli JSON. Her ünitenin page_text alanı, sonraki Anlatım/quiz/harita için KAYNAK metindir:
-- Türkçe, öğretici, somut
-- Madde işaretleri ve kısa paragraflar
-- Uydurma makale/atıf yok; genel öğretim dili
-- Her page_text en az ~280 kelime, net ve yoğun`
-
-    const user = `Öğrenme hedefi: ${goal}
-Seviye / amaç: ${level}
-${subjectHint ? `Ders ipucu: ${subjectHint}\n` : ''}Ünite sayısı: ${unitCount}
-
-JSON şema:
-{
-  "book_title": "kısa kitap/konu adı",
-  "subject": "Math|Physics|History|Law|Other veya Türkçe ders adı",
-  "chapters": [
-    {
-      "title": "ünite başlığı",
-      "summary": "1-2 cümle",
-      "key_concepts": ["…", "…"],
-      "page_text": "uzun öğretim kaynağı (markdown-benzeri düz metin)"
-    }
-  ]
-}`
-
-    const usageBag = createUsageBag()
-    const { data: bookOwner } = await admin
-      .from('books')
-      .select('user_id')
-      .eq('id', bookId)
-      .maybeSingle()
-    // Same JSON helper as PDF chapter notes — retries without response_format
-    // when Ling/Novita returns opaque 400 Bad Request.
-    const { value, usage, provider } = await llmCompleteJson({
+    // ——— 1) RESEARCH: concepts, links, must-learn ———
+    pipelineStep = 'topic_research'
+    await setProgress(admin, bookId, pipelineStep)
+    const researchRes = await llmCompleteJson({
       messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
+        { role: 'system', content: researchSystemPrompt() },
+        { role: 'user', content: researchUserPrompt(brief, capacity) },
       ],
-      temperature: 0.35,
-      maxTokens: depth === 'path' ? 4000 : 2600,
-      retries: 2,
+      temperature: 0.3,
+      maxTokens: 1600,
+      retries: 1,
       skipRepairCall: true,
     })
-    recordUsage(usageBag, usage, provider)
+    recordUsage(usageBag, researchRes.usage, researchRes.provider)
+    const research = normalizeResearch(researchRes.value, brief, capacity)
+    console.log('topic-study research ok', {
+      concepts: research.concepts.length,
+      pattern: research.pattern,
+    })
 
-    const plan = normalizePlan(value, goal)
+    // ——— 2) CLUSTER: pack concepts into time-budgeted units (no LLM) ———
+    pipelineStep = 'topic_cluster'
+    await setProgress(admin, bookId, pipelineStep)
+    const outline = clusterResearchIntoUnits(research, brief, capacity)
+    console.log('topic-study cluster ok', { units: outline.chapters.length })
 
+    // Pause so Requesty/Novita RPM from research (+ json retries) can cool down.
+    await sleep(2000)
+
+    // ——— 3) WRITE: one LLM call (single unit or batched path) ———
+    const total = outline.chapters.length
+    const tokenBudget = writeMaxTokens(capacity.wordsPerUnit.max, total)
+    let written: WrittenUnit[] = []
+
+    if (total === 1) {
+      pipelineStep = 'topic_write_1_of_1'
+      await setProgress(admin, bookId, pipelineStep)
+      const unit = outline.chapters[0]
+      const writeRes = await llmCompleteJson({
+        messages: [
+          {
+            role: 'system',
+            content: writeUnitSystemPrompt(outline.pattern, brief.purpose),
+          },
+          {
+            role: 'user',
+            content: writeUnitUserPrompt({
+              brief,
+              outline,
+              unit,
+              words: capacity.wordsPerUnit,
+              unitIndex: 1,
+              unitTotal: 1,
+            }),
+          },
+        ],
+        temperature: 0.4,
+        maxTokens: tokenBudget,
+        retries: 1,
+        skipRepairCall: true,
+      })
+      recordUsage(usageBag, writeRes.usage, writeRes.provider)
+      written = [normalizeWrittenUnit(writeRes.value, unit, { soft: true })]
+    } else {
+      pipelineStep = 'topic_write_batch'
+      await setProgress(admin, bookId, pipelineStep)
+      const batchRes = await llmCompleteJson({
+        messages: [
+          {
+            role: 'system',
+            content: writeBatchSystemPrompt(outline.pattern, brief.purpose),
+          },
+          {
+            role: 'user',
+            content: writeBatchUserPrompt({
+              brief,
+              outline,
+              words: capacity.wordsPerUnit,
+            }),
+          },
+        ],
+        temperature: 0.35,
+        maxTokens: tokenBudget,
+        retries: 1,
+        skipRepairCall: true,
+      })
+      recordUsage(usageBag, batchRes.usage, batchRes.provider)
+      written = normalizeBatchWritten(batchRes.value, outline)
+    }
+    console.log('topic-study write ok', { units: written.length })
+
+    pipelineStep = 'topic_saving'
+
+    if (written.length === 0) {
+      throw new Error('Konu planı boş döndü — tekrar dene')
+    }
+
+    await setProgress(admin, bookId, 'topic_saving')
     await admin.from('chapters').delete().eq('book_id', bookId)
 
-    const rows = plan.chapters.map((c, i) => {
+    const header = researchHeader(research)
+    const rows = written.map((c, i) => {
       const n = i + 1
+      const meta = [
+        n === 1 ? header : '',
+        `--- Topic unit ${n} ---`,
+        `pattern: ${outline.pattern}`,
+        `objective: ${c.objective}`,
+        `minutes: ${c.minutes}`,
+        `concepts: ${c.concept_ids.join(',')}`,
+        '',
+      ]
+        .filter(Boolean)
+        .join('\n')
       return {
         book_id: bookId,
         chapter_number: n,
@@ -206,7 +270,7 @@ JSON şema:
         end_page: n,
         summary: c.summary,
         key_concepts: c.key_concepts,
-        page_text: `--- Topic unit ${n} ---\n${c.page_text}`,
+        page_text: `${meta}${c.page_text}`,
         status: 'pending' as const,
       }
     })
@@ -219,19 +283,19 @@ JSON şema:
     if (insErr) throw insErr
 
     const nextTitle =
-      plan.book_title && plan.book_title !== 'Konu çalışması'
-        ? plan.book_title
+      outline.book_title && outline.book_title !== 'Konu çalışması'
+        ? outline.book_title
         : book.title
 
     await admin
       .from('books')
       .update({
         title: nextTitle,
-        subject: plan.subject || subjectHint || null,
+        subject: outline.subject || subjectHint || null,
         status: 'ready',
         progress_step: 'topic_ready',
         source_kind: 'topic',
-        total_pages: plan.chapters.length,
+        total_pages: written.length,
         file_url: null,
         error_message: null,
       })
@@ -241,8 +305,16 @@ JSON şema:
       operation: 'topic_study',
       bag: usageBag,
       bookId,
-      userId: (bookOwner?.user_id as string | undefined) || null,
-      meta: { depth, units: plan.chapters.length },
+      userId: (book.user_id as string | undefined) || null,
+      meta: {
+        depth,
+        minutes,
+        purpose,
+        pattern: outline.pattern,
+        units: written.length,
+        concepts: research.concepts.length,
+        pipeline: 'research_cluster_write',
+      },
     })
 
     return new Response(
@@ -250,12 +322,29 @@ JSON şema:
         ok: true,
         book_id: bookId,
         book_title: nextTitle,
+        pattern: outline.pattern,
+        concepts: research.concepts.map((c) => ({
+          id: c.id,
+          name: c.name,
+        })),
         chapters: inserted ?? [],
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     )
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
+    const code =
+      err && typeof err === 'object' && 'code' in err
+        ? String((err as { code?: string }).code || '')
+        : ''
+    console.error('topic-study fail', { step: pipelineStep, code, msg: msg.slice(0, 500) })
+
+    // Keep provider status/body visible for debugging (PDF vs topic).
+    const statusMatch = msg.match(/AI error (\d{3}):\s*(.*)/i)
+    const detail = statusMatch
+      ? `provider_status=${statusMatch[1]} body=${statusMatch[2].slice(0, 280)}`
+      : msg.slice(0, 360)
+
     if (bookIdForFail) {
       try {
         const supabaseUrl = Deno.env.get('SUPABASE_URL')
@@ -266,8 +355,8 @@ JSON şema:
             .from('books')
             .update({
               status: 'failed',
-              progress_step: 'topic_failed',
-              error_message: msg.slice(0, 500),
+              progress_step: `topic_failed:${pipelineStep}`,
+              error_message: `[${pipelineStep}] ${msg}`.slice(0, 900),
             })
             .eq('id', bookIdForFail)
         }
@@ -275,9 +364,18 @@ JSON şema:
         /* ignore */
       }
     }
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    return new Response(
+      JSON.stringify({
+        error: msg,
+        step: pipelineStep,
+        detail,
+        model: mimoModel,
+        code: code || undefined,
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    )
   }
 })

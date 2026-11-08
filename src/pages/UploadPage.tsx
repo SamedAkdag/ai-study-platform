@@ -17,7 +17,10 @@ import {
   isSupportedUpload,
   normalizeUploadToPdf,
 } from '@/lib/normalizeUploadFile'
-import { friendlyAiError } from '@/lib/errors'
+import {
+  friendlyAiError,
+  topicStudyDebugDetail,
+} from '@/lib/errors'
 
 const MAX_MB = 50
 
@@ -141,18 +144,43 @@ export default function UploadPage() {
       })
       bookId = created.id
 
-      setPhase(
-        brief.depth === 'path'
-          ? 'Ünite yolu yazılıyor…'
-          : 'Ünite kaynağı yazılıyor…',
-      )
-      const result = await createTopicStudy({
-        bookId,
-        goal: brief.goal,
-        level: brief.level,
-        depth: brief.depth,
-        subject: subject.trim() || null,
-      })
+      setPhase('Kavram araştırması…')
+      const phasePoll = window.setInterval(() => {
+        void supabase
+          .from('books')
+          .select('progress_step')
+          .eq('id', bookId!)
+          .maybeSingle()
+          .then(({ data }) => {
+            const step = String(data?.progress_step || '')
+            if (step === 'topic_research') {
+              setPhase('Kavram araştırması · bağlar kuruluyor…')
+            } else if (step === 'topic_cluster') {
+              setPhase('Öğrenme kümeleri · süreye göre paketleniyor…')
+            } else if (step === 'topic_write_batch') {
+              setPhase('Ünite kaynakları yazılıyor…')
+            } else if (step.startsWith('topic_write_')) {
+              setPhase('Ünite kaynağı yazılıyor…')
+            } else if (step === 'topic_saving') {
+              setPhase('Üniteler kaydediliyor…')
+            }
+          })
+      }, 1400)
+
+      let result: Awaited<ReturnType<typeof createTopicStudy>>
+      try {
+        result = await createTopicStudy({
+          bookId,
+          goal: brief.goal,
+          level: brief.level,
+          depth: brief.depth,
+          minutes: brief.minutes,
+          purpose: brief.purpose,
+          subject: subject.trim() || null,
+        })
+      } finally {
+        window.clearInterval(phasePoll)
+      }
 
       rememberLibraryBook({
         bookId,
@@ -171,8 +199,11 @@ export default function UploadPage() {
       }
     } catch (err) {
       const msg = friendlyAiError(err)
-      if (bookId) await markBookFailed(bookId, msg).catch(() => {})
-      setError(msg)
+      const debug = topicStudyDebugDetail(err)
+      const shown = debug ? `${msg}\n\nTeşhis: ${debug}` : msg
+      console.error('topic-study client fail', err)
+      if (bookId) await markBookFailed(bookId, shown).catch(() => {})
+      setError(shown)
       setBusy(false)
       setPhase(null)
     }
@@ -360,9 +391,54 @@ export default function UploadPage() {
             <p className="upload-preview__kicker">
               Kaynağını seçince bunlar seni bekler
             </p>
-            <PdfStudyLobby />
-            <ReadStudioLobby preview />
-            <PracticeLobby preview />
+
+            <section
+              className="upload-preview__block upload-preview__block--pdf"
+              aria-label="1 · PDF’den çalış"
+            >
+              <div className="upload-preview__block-bar">
+                <span className="upload-preview__step">1</span>
+                <div className="upload-preview__block-copy">
+                  <p className="upload-preview__block-eye">Kaynak masası</p>
+                  <h3 className="upload-preview__block-title">PDF’den çalış</h3>
+                </div>
+              </div>
+              <div className="upload-preview__block-body">
+                <PdfStudyLobby />
+              </div>
+            </section>
+
+            <section
+              className="upload-preview__block upload-preview__block--read"
+              aria-label="2 · Anlatım"
+            >
+              <div className="upload-preview__block-bar">
+                <span className="upload-preview__step">2</span>
+                <div className="upload-preview__block-copy">
+                  <p className="upload-preview__block-eye">Öğrenme</p>
+                  <h3 className="upload-preview__block-title">Anlatım</h3>
+                </div>
+              </div>
+              <div className="upload-preview__block-body">
+                <ReadStudioLobby preview />
+              </div>
+            </section>
+
+            <section
+              className="upload-preview__block upload-preview__block--practice"
+              aria-label="3 · Alıştır"
+            >
+              <div className="upload-preview__block-bar">
+                <span className="upload-preview__step">3</span>
+                <div className="upload-preview__block-copy">
+                  <p className="upload-preview__block-eye">Pekiştirme</p>
+                  <h3 className="upload-preview__block-title">Alıştır</h3>
+                </div>
+              </div>
+              <div className="upload-preview__block-body">
+                <PracticeLobby preview />
+              </div>
+            </section>
           </aside>
         ) : null}
       </div>
