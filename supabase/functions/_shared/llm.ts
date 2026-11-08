@@ -557,16 +557,17 @@ export async function llmCompleteJson(opts: {
             {
               role: 'system',
               content:
-                'Return ONLY valid compact JSON. Escape newlines as \\n inside strings. No markdown fences. Do not truncate.',
+                'Return ONLY valid compact JSON object. Escape every newline inside strings as \\n. No markdown fences. If input was truncated, close strings/braces and keep as much content as possible.',
             },
             {
               role: 'user',
-              content: `Fix into valid JSON object:\n${text.slice(0, 8000)}`,
+              content: `Fix into valid JSON object:\n${text.slice(0, 12_000)}`,
             },
           ],
           json: true,
           temperature: 0,
-          maxTokens: Math.min(opts.maxTokens ?? 3000, 2800),
+          // Match original budget so long markdown notes can be repaired
+          maxTokens: Math.max(1200, opts.maxTokens ?? 3000),
         })
         usageAcc = addTokenUsage(usageAcc, repairedRes.usage)
         const value = safeParseJson(repairedRes.text) as Record<string, unknown>

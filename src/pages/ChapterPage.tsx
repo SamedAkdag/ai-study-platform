@@ -106,6 +106,7 @@ export default function ChapterPage() {
     'Gerçek dünya örnekleriyle, sade ve anlaşılır anlat',
   )
   const [genError, setGenError] = useState<string | null>(null)
+  const [notesChainLabel, setNotesChainLabel] = useState<string | null>(null)
   const [artifactError, setArtifactError] = useState<string | null>(null)
   const [mobilePane, setMobilePane] = useState<'pdf' | 'notes'>('pdf')
   const [pdfFocusPage, setPdfFocusPage] = useState<number | null>(null)
@@ -291,14 +292,18 @@ export default function ChapterPage() {
   const artifactTried = useRef<Record<string, string>>({})
 
   const generateMutation = useMutation({
-    mutationFn: () =>
-      generateSingleChapterContent({
+    mutationFn: () => {
+      setNotesChainLabel('1 · Ders iskeleti (plan)')
+      return generateSingleChapterContent({
         id: chapterQuery.data!.id,
         title: chapterQuery.data!.title,
         style: stylePref.trim(),
-      }),
+        onStage: (info) => setNotesChainLabel(info.label),
+      })
+    },
     onSuccess: async () => {
       setGenError(null)
+      setNotesChainLabel(null)
       autoRetryRef.current = 0
       artifactTried.current = {}
       setArtifactError(null)
@@ -307,6 +312,7 @@ export default function ChapterPage() {
       void queryClient.invalidateQueries({ queryKey: ['ai-usage', bookId] })
     },
     onError: (err) => {
+      setNotesChainLabel(null)
       setGenError(friendlyAiError(err))
       void queryClient.invalidateQueries({ queryKey: ['chapter', chapterId] })
       if (isRetryableAiError(err) && autoRetryRef.current < 1) {
@@ -1727,10 +1733,17 @@ export default function ChapterPage() {
           <LessonWaitMood
             kind={bundleMutation.isPending ? 'bundle' : 'notes'}
             size="banner"
+            title={
+              generateMutation.isPending && notesChainLabel
+                ? notesChainLabel
+                : undefined
+            }
             detail={
               bundleMutation.isPending
                 ? 'Not + özet + detay + alıştır + harita'
-                : 'Özet / detay / alıştır tıklayınca gelir'
+                : notesChainLabel
+                  ? 'Sıralı aşama · her çıktı sonraki girdidir'
+                  : 'Özet / detay / alıştır tıklayınca gelir'
             }
           />
         </div>

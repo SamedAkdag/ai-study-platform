@@ -15,6 +15,8 @@ export type Book = {
   status: BookStatus
   progress_step: string | null
   error_message: string | null
+  /** Topic waitUntil chain checkpoint (brief/research/outline/next_unit). */
+  pipeline_state?: Record<string, unknown> | null
   study_seconds: number | null
   share_token: string | null
   is_public: boolean | null

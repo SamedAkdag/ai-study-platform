@@ -52,10 +52,18 @@ export function scoreNotesMarkdown(
   } else {
     score += 10
   }
-  if (md.length > 120 && md.length < 2200) score += 5
+  // Prefer real lesson length (staged Anlatım); don’t reward skim.
+  if (md.length >= 4500) score += 12
+  else if (md.length >= 2800) score += 8
+  else if (md.length >= 1200) score += 4
+  else if (md.length > 120 && md.length < 900) {
+    issues.push('thin_notes')
+    score -= 8
+  }
 
   const h2 = (md.match(/^##\s+/gm) || []).length
-  if (h2 >= 3) score += 10
+  if (h2 >= 5) score += 12
+  else if (h2 >= 3) score += 10
   else issues.push('few_headings')
 
   if (/\|.+\|/.test(md)) score += 8

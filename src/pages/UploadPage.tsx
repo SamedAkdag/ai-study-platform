@@ -144,43 +144,18 @@ export default function UploadPage() {
       })
       bookId = created.id
 
-      setPhase('Kavram araştırması…')
-      const phasePoll = window.setInterval(() => {
-        void supabase
-          .from('books')
-          .select('progress_step')
-          .eq('id', bookId!)
-          .maybeSingle()
-          .then(({ data }) => {
-            const step = String(data?.progress_step || '')
-            if (step === 'topic_research') {
-              setPhase('Kavram araştırması · bağlar kuruluyor…')
-            } else if (step === 'topic_cluster') {
-              setPhase('Öğrenme kümeleri · süreye göre paketleniyor…')
-            } else if (step === 'topic_write_batch') {
-              setPhase('Ünite kaynakları yazılıyor…')
-            } else if (step.startsWith('topic_write_')) {
-              setPhase('Ünite kaynağı yazılıyor…')
-            } else if (step === 'topic_saving') {
-              setPhase('Üniteler kaydediliyor…')
-            }
-          })
-      }, 1400)
-
+      setPhase('1/4 · Kavram araştırması…')
       let result: Awaited<ReturnType<typeof createTopicStudy>>
-      try {
-        result = await createTopicStudy({
-          bookId,
-          goal: brief.goal,
-          level: brief.level,
-          depth: brief.depth,
-          minutes: brief.minutes,
-          purpose: brief.purpose,
-          subject: subject.trim() || null,
-        })
-      } finally {
-        window.clearInterval(phasePoll)
-      }
+      result = await createTopicStudy({
+        bookId,
+        goal: brief.goal,
+        level: brief.level,
+        depth: brief.depth,
+        minutes: brief.minutes,
+        purpose: brief.purpose,
+        subject: subject.trim() || null,
+        onStage: (info) => setPhase(info.label),
+      })
 
       rememberLibraryBook({
         bookId,

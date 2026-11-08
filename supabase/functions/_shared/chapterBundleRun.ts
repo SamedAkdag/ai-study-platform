@@ -21,11 +21,12 @@ import {
   CACHE_LAYOUT_VERSION,
   estimatePrefixTokens,
   fixedSourceFingerprint,
+  isTopicPageText,
   taskBrief,
   taskDetailedOneShot,
-  taskNotes,
   taskPractice,
 } from './cacheableChapter.ts'
+import { buildStagedNotes } from './notesPipeline.ts'
 import {
   buildTwoStageMindMap,
   cleanExcerpt,
@@ -165,6 +166,7 @@ export async function runChapterBundle(
 
   const allPages = splitPageText(rawText)
   const pageNums = allPages.map((p) => p.page)
+  const topicSource = isTopicPageText(rawText)
   const excerpts = new Map<number, string>()
   for (const p of allPages) {
     excerpts.set(p.page, cleanExcerpt(p.text, 240))
@@ -182,29 +184,26 @@ export async function runChapterBundle(
     prefix_ok_for_th: prefixTokensEst >= 1024,
     cache_layout: CACHE_LAYOUT_VERSION,
     in_process_bundle: true,
+    topic_source: topicSource,
   }
 
-  // ——— NOTES (cold miss expected) ———
+  // ——— NOTES: staged for topic/long SOURCE (mind-map style pipeline) ———
   const notesBag = createUsageBag()
-  const notesParsed = await askCacheableJson({
+  // Bundle stays in one isolate — hard-cap 2 LLM calls (no client loop here).
+  const staged = await buildStagedNotes({
     fixedSource,
-    task: taskNotes({ pageNums, style }),
+    pageText: rawText,
+    pageNums,
+    style,
+    maxLlmCalls: 2,
   })
-  recordUsage(notesBag, notesParsed.usage, notesParsed.provider)
+  recordUsage(notesBag, staged.usage, 'mimo')
 
-  let k2 =
-    typeof notesParsed.value.k2 === 'string'
-      ? notesParsed.value.k2
-      : typeof notesParsed.value.markdown === 'string'
-        ? notesParsed.value.markdown
-        : ''
-  let topics = Array.isArray(notesParsed.value.topics)
-    ? notesParsed.value.topics.map(String).map((t) => t.trim()).filter(Boolean)
-    : []
+  const k2 = staged.k2
+  const topics = staged.topics
 
   if (!k2.trim()) throw new Error('Empty notes from bundle')
 
-  // Skip repair in bundle — saves a full LLM round (Edge CPU / 546 risk).
   const notesQuality = scoreNotesMarkdown(k2, pageNums)
 
   const keyConcepts = [
@@ -223,6 +222,7 @@ export async function runChapterBundle(
     .from('chapters')
     .update({
       explanation: k2.slice(0, 24_000),
+      explanation_detailed: staged.staged ? k2.slice(0, 36_000) : null,
       key_concepts: keyConcepts.length ? keyConcepts : null,
       page_sources: pageSources,
       status: 'ready',
@@ -237,7 +237,16 @@ export async function runChapterBundle(
     chapterId,
     userId: bookCtx.userId,
     bag: notesBag,
-    meta: { ...usageMetaBase, one_shot: true, total_chunks: 1 },
+    meta: {
+      ...usageMetaBase,
+      staged: staged.staged,
+      sections: staged.sections,
+      batches: staged.batches,
+      rewrites: staged.rewrites,
+      minutes: staged.meta.minutes,
+      total_chunks: 1,
+      notes_quality: notesQuality.score,
+    },
   })
 
   const notes_usage = {
@@ -258,7 +267,7 @@ export async function runChapterBundle(
   }> = []
 
   let explanation = k2
-  let explanationDetailed = ''
+  let explanationDetailed = staged.staged ? k2.slice(0, 36_000) : ''
   let currentPageSources = pageSources
   let currentConcepts = keyConcepts
 
@@ -266,9 +275,18 @@ export async function runChapterBundle(
     const bag = createUsageBag()
     try {
       if (kind === 'detailed') {
+        // Staged Anlatım already deep — skip extra one-shot (Edge 546 risk).
+        if (staged.staged && explanationDetailed.trim()) {
+          artifacts.push({
+            kind: 'detailed',
+            ok: true,
+            cached_db: true,
+          })
+          continue
+        }
         const filled = await askCacheableJson({
           fixedSource,
-          task: taskDetailedOneShot(style),
+          task: taskDetailedOneShot(style, topicSource),
         })
         recordUsage(bag, filled.usage, filled.provider)
         const markdown = String(

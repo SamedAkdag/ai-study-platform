@@ -67,9 +67,9 @@ const MOOD: Record<
     emoji: '📘',
     title: 'Anlatım hazırlanıyor',
     tips: [
-      'Sayfalar taranıyor…',
-      'Konular sıraya diziliyor…',
-      'Notlar derleniyor…',
+      '1 · Plan → 2 · Yazım → 3 · Kontrol…',
+      'Her aşama bir öncekinin çıktısını kullanır…',
+      'MiMo sıralı zincir · Edge güvenli…',
     ],
   },
   practice: {

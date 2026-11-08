@@ -61,8 +61,8 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
         <p className="topic-chat__eyebrow">PDF yok · çalışma brief’i</p>
         <h2 className="topic-chat__title">Ne öğrenmek istiyorsun?</h2>
         <p className="topic-chat__lead">
-          Süre ve amacını söyle. Studium önce kavram araştırması yapar, bağları
-          kümeleyip sana çalışılacak kaynağı üretir.
+          Süre ve amacını söyle. Studium senin yerinize birden fazla uzman
+          prompt’u çalıştırır: sözleşme → araştırma → zamanlı plan → kaynak.
         </p>
       </header>
 
@@ -312,8 +312,8 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
             </p>
           </div>
           <p className="topic-chat__note muted text-sm">
-            Aşamalar: kavram araştırması → öğrenme kümeleri → ünite kaynağı.
-            Anlatım / Alıştır bu kaynağa dayanır.
+            90 dk gibi uzun sürelerde dakika dakika müfredat + ince detay üretilir;
+            kısa sürede daha sıkı sprint. Anlatım / Alıştır bu kaynağa dayanır.
           </p>
           <div className="topic-chat__actions">
             <button

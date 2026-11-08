@@ -51,7 +51,18 @@ export async function createBookRecord(input: {
   return data
 }
 
-/** Chat brief → agentic topic units (no PDF). Fills chapters.page_text as SOURCE. */
+export type TopicStudyStageInfo = {
+  stage: string
+  label: string
+  unitIndex?: number
+  unitTotal?: number
+}
+
+/**
+ * Topic pipeline — client drains one process_next per Edge invoke.
+ * Do not rely on waitUntil(fetch): that keeps the parent isolate alive
+ * for the whole chain and causes Edge 546.
+ */
 export async function createTopicStudy(input: {
   bookId: string
   goal: string
@@ -60,38 +71,132 @@ export async function createTopicStudy(input: {
   minutes?: number
   purpose?: 'exam' | 'understand' | 'homework' | 'review'
   subject?: string | null
+  onStage?: (info: TopicStudyStageInfo) => void
 }) {
-  const { data, error } = await supabase.functions.invoke('create-topic-study', {
-    body: {
-      book_id: input.bookId,
-      goal: input.goal,
-      level: input.level || 'genel',
-      depth: input.depth || 'one',
-      minutes: input.minutes ?? 30,
-      purpose: input.purpose || 'understand',
-      subject: input.subject || undefined,
-    },
+  const base = {
+    book_id: input.bookId,
+    goal: input.goal,
+    level: input.level || 'genel',
+    depth: input.depth || 'one',
+    minutes: input.minutes ?? 30,
+    purpose: input.purpose || 'understand',
+    subject: input.subject || undefined,
+  }
+
+  const fail = (msg: string) => {
+    throw new Error(msg)
+  }
+
+  const isJsonGlitch = (msg: string) =>
+    /not valid json|json parse|ai response was not valid/i.test(msg)
+
+  const isEdgeBudget = (msg: string) =>
+    /compute resources|worker_resource|546|belleği doldu/i.test(msg)
+
+  const invokeStage = async (
+    stage: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const { data, error } = await supabase.functions.invoke(
+        'create-topic-study',
+        { body: { ...base, stage, ...extra } },
+      )
+      if (error) {
+        const detail = await extractFunctionsError(error, data)
+        if (
+          attempt === 0 &&
+          (isJsonGlitch(detail) || isEdgeBudget(detail))
+        ) {
+          await new Promise((r) => setTimeout(r, 900))
+          continue
+        }
+        fail(detail)
+      }
+      if (data?.error) {
+        const msg = [data.step ? `[${data.step}]` : '', String(data.error)]
+          .filter(Boolean)
+          .join(' ')
+        if (attempt === 0 && (isJsonGlitch(msg) || isEdgeBudget(msg))) {
+          await new Promise((r) => setTimeout(r, 900))
+          continue
+        }
+        fail(msg)
+      }
+      return (data || {}) as Record<string, unknown>
+    }
+    fail('Konu aşaması başarısız')
+    return {}
+  }
+
+  // ——— 1) RESEARCH ———
+  input.onStage?.({
+    stage: 'research',
+    label: '1/3 · Kavram araştırması',
+  })
+  const researchRes = await invokeStage('research')
+  const research = researchRes.research
+  if (!research) fail('Araştırma çıktısı boş')
+
+  // ——— 2) CURRICULUM → enqueue stubs ———
+  input.onStage?.({
+    stage: 'curriculum',
+    label: '2/3 · Müfredat · bölümler kuyruğa',
+  })
+  const currRes = await invokeStage('curriculum', { research })
+  if (!currRes.queued && !currRes.poll) {
+    fail('Müfredat kuyruğu başlamadı')
+  }
+  const unitTotal = Math.max(1, Number(currRes.units) || 1)
+
+  // ——— 3) Client drain: 1 process_next = 1 unit = 1 isolate ———
+  input.onStage?.({
+    stage: 'writing',
+    label: `3/3 · Ünite 1/${unitTotal}`,
+    unitIndex: 0,
+    unitTotal,
   })
 
-  if (error) {
-    throw new Error(await extractFunctionsError(error, data))
+  const started = Date.now()
+  const maxMs = 10 * 60_000
+  let safety = 0
+  const maxSteps = unitTotal + 4
+
+  while (Date.now() - started < maxMs && safety < maxSteps) {
+    safety += 1
+    input.onStage?.({
+      stage: 'writing',
+      label: `3/3 · Ünite ${Math.min(safety, unitTotal)}/${unitTotal}`,
+      unitIndex: Math.min(safety - 1, unitTotal - 1),
+      unitTotal,
+    })
+
+    const stepRes = await invokeStage('process_next', { goal: 'pipeline' })
+    if (stepRes.done === true) {
+      const { data: bookRow } = await supabase
+        .from('books')
+        .select('title')
+        .eq('id', input.bookId)
+        .maybeSingle()
+      const { data: chapters } = await supabase
+        .from('chapters')
+        .select('id, title, order_index, status')
+        .eq('book_id', input.bookId)
+        .order('order_index')
+      return {
+        ok: true,
+        book_id: input.bookId,
+        book_title: String(bookRow?.title || currRes.book_title || ''),
+        chapters: chapters ?? [],
+      }
+    }
+
+    // Brief pause so Edge can recycle isolate between units
+    await new Promise((r) => setTimeout(r, 400))
   }
-  if (data?.error) {
-    const step = typeof data.step === 'string' ? data.step : ''
-    const detail = typeof data.detail === 'string' ? data.detail : ''
-    const model = typeof data.model === 'string' ? data.model : ''
-    throw new Error(
-      [step ? `[${step}]` : '', String(data.error), detail ? `Detail: ${detail}` : '', model ? `Model: ${model}` : '']
-        .filter(Boolean)
-        .join(' '),
-    )
-  }
-  return data as {
-    ok: boolean
-    book_id: string
-    book_title: string
-    chapters: Array<{ id: string; title: string; order_index: number | null }>
-  }
+
+  fail('Konu üretimi zaman aşımı — tekrar dene')
+  throw new Error('unreachable')
 }
 
 export async function segmentWindowsWithAi(
@@ -301,61 +406,177 @@ export async function saveChapters(
   return data ?? []
 }
 
-/** Generate standard notes for ONE chapter (single LLM call; full unit SOURCE). */
+export type NotesChainStageInfo = {
+  stage: string
+  label: string
+  batchIndex?: number
+  totalBatches?: number
+}
+
+/**
+ * LangChain-style sequential Anlatım (MiMo only, 1 LLM / Edge invoke):
+ *   1 outline → 2 write×N (each uses plan + prior parts) → 3 evaluate
+ *   → 4 rewrite weak → 5 finish (assemble + save)
+ * Short PDF may oneshot and return done immediately.
+ */
 export async function generateSingleChapterContent(input: {
   id: string
   title: string
   style?: string
+  onStage?: (info: NotesChainStageInfo) => void
 }) {
-  const { data, error } = await supabase.functions.invoke(
-    'generate-chapter-content',
-    {
-      body: {
-        chapter_id: input.id,
-        title: input.title,
-        style: input.style || undefined,
-        chunk_index: 0,
-      },
+  type NotesPass =
+    | 'outline'
+    | 'write'
+    | 'evaluate'
+    | 'rewrite'
+    | 'finish'
+    | 'oneshot'
+    | 'auto'
+
+  const isJsonGlitch = (msg: string) =>
+    /not valid json|json parse|ai response was not valid|bozuk yanıt/i.test(msg)
+
+  const markFailed = async () => {
+    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
+  }
+
+  const invokePass = async (
+    notesPass: NotesPass,
+    state: {
+      plan?: unknown
+      meta?: unknown
+      parts?: Record<string, string>
+      batch_index?: number
+      section_id?: string
+      issues?: string[]
     },
-  )
-
-  if (error) {
-    const detail = await extractFunctionsError(error, data)
-    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
-    throw new Error(detail)
-  }
-
-  if (data?.error) {
-    await supabase.from('chapters').update({ status: 'failed' }).eq('id', input.id)
-    throw new Error(String(data.error))
-  }
-
-  if (!data?.done && data?.next_chunk != null) {
-    // Legacy multi-chunk edge still deployed — finish remaining chunks.
-    let chunkIndex = Number(data.next_chunk)
-    let guard = 0
-    while (guard < 8 && Number.isFinite(chunkIndex)) {
-      guard += 1
-      const cont = await supabase.functions.invoke('generate-chapter-content', {
+  ) => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const res = await supabase.functions.invoke('generate-chapter-content', {
         body: {
           chapter_id: input.id,
           title: input.title,
           style: input.style || undefined,
-          chunk_index: chunkIndex,
+          chunk_index: 0,
+          notes_pass: notesPass,
+          ...state,
         },
       })
-      if (cont.error) {
-        throw new Error(await extractFunctionsError(cont.error, cont.data))
+      const errMsg = res.error
+        ? await extractFunctionsError(res.error, res.data)
+        : res.data?.error
+          ? String(res.data.error)
+          : ''
+      if (!errMsg) return (res.data || {}) as Record<string, unknown>
+      if (attempt === 0 && isJsonGlitch(errMsg)) {
+        await new Promise((r) => setTimeout(r, 700))
+        continue
       }
-      if (cont.data?.error) throw new Error(String(cont.data.error))
-      if (cont.data?.done) return cont.data
-      const next = Number(cont.data?.next_chunk)
-      if (!Number.isFinite(next) || next <= chunkIndex) break
-      chunkIndex = next
+      await markFailed()
+      throw new Error(errMsg)
+    }
+    await markFailed()
+    throw new Error('Anlatım aşaması başarısız')
+  }
+
+  // ——— 1) OUTLINE (or oneshot for short PDF) ———
+  input.onStage?.({
+    stage: 'outline',
+    label: '1 · Ders iskeleti (plan)',
+  })
+  const outlineRes = await invokePass('auto', {})
+  if (outlineRes.done) return outlineRes
+
+  let plan = outlineRes.plan
+  let meta = outlineRes.meta
+  let parts: Record<string, string> =
+    outlineRes.parts && typeof outlineRes.parts === 'object'
+      ? (outlineRes.parts as Record<string, string>)
+      : {}
+  if (!plan) {
+    await markFailed()
+    throw new Error('Anlatım planı boş döndü')
+  }
+
+  const totalBatches = Math.max(1, Number(outlineRes.total_batches) || 1)
+
+  // ——— 2) WRITE each batch — sequential; parts accumulate ———
+  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex += 1) {
+    input.onStage?.({
+      stage: 'write',
+      label: `2 · Bölüm yazımı ${batchIndex + 1}/${totalBatches}`,
+      batchIndex,
+      totalBatches,
+    })
+    const writeRes = await invokePass('write', {
+      plan,
+      meta,
+      parts,
+      batch_index: batchIndex,
+    })
+    if (writeRes.plan) plan = writeRes.plan
+    if (writeRes.meta) meta = writeRes.meta
+    if (writeRes.parts && typeof writeRes.parts === 'object') {
+      parts = { ...parts, ...(writeRes.parts as Record<string, string>) }
     }
   }
 
-  return data
+  // ——— 3–4) EVALUATE → REWRITE weak (uses plan + parts) ———
+  const rewritten = new Set<string>()
+  for (let round = 0; round < 5; round += 1) {
+    input.onStage?.({
+      stage: 'evaluate',
+      label: '3 · Kalite kontrolü',
+    })
+    const ev = await invokePass('evaluate', { plan, meta, parts })
+    if (ev.plan) plan = ev.plan
+    if (ev.parts && typeof ev.parts === 'object') {
+      parts = ev.parts as Record<string, string>
+    }
+    const weak = Array.isArray(ev.weak)
+      ? (ev.weak as Array<{
+          sectionId?: string
+          issues?: string[]
+        }>)
+      : []
+    const candidate = weak.find(
+      (w) => w.sectionId && !rewritten.has(String(w.sectionId)),
+    )
+    const maxRw = Math.min(4, Math.max(2, Math.ceil(weak.length)))
+    if (!candidate?.sectionId || rewritten.size >= maxRw) break
+
+    const sectionId = String(candidate.sectionId)
+    rewritten.add(sectionId)
+    input.onStage?.({
+      stage: 'rewrite',
+      label: `4 · Bölüm güçlendirme (${rewritten.size}/${maxRw})`,
+    })
+    const rw = await invokePass('rewrite', {
+      plan,
+      meta,
+      parts,
+      section_id: sectionId,
+      issues: Array.isArray(candidate.issues)
+        ? candidate.issues.map(String)
+        : [],
+    })
+    if (rw.parts && typeof rw.parts === 'object') {
+      parts = { ...parts, ...(rw.parts as Record<string, string>) }
+    }
+  }
+
+  // ——— 5) FINISH — assemble from plan + parts ———
+  input.onStage?.({
+    stage: 'finish',
+    label: '5 · Birleştirme ve kayıt',
+  })
+  const finished = await invokePass('finish', { plan, meta, parts })
+  if (!finished.done) {
+    await markFailed()
+    throw new Error('Anlatım kaydı tamamlanamadı')
+  }
+  return finished
 }
 
 export type ChapterArtifactKind =

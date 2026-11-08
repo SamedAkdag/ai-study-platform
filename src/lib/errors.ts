@@ -19,10 +19,12 @@ export function throwAsError(err: unknown, fallback?: string): never {
 
 const TOPIC_STEP_LABELS: Record<string, string> = {
   init: 'Başlangıç',
-  topic_research: '1/3 Kavram araştırması',
-  topic_cluster: '2/3 Öğrenme kümeleri',
-  topic_write_1_of_1: '3/3 Ünite yazımı',
-  topic_write_batch: '3/3 Ünite yazımı (toplu)',
+  topic_charter: 'Öğrenme sözleşmesi',
+  topic_research: 'Kavram araştırması',
+  topic_curriculum: 'Zamanlı müfredat',
+  topic_cluster: 'Öğrenme kümeleri',
+  topic_write_1_of_1: 'Ünite kaynağı',
+  topic_write_batch: 'Ünite kaynakları',
   topic_saving: 'Kayıt',
 }
 
@@ -53,7 +55,7 @@ export function friendlyAiError(err: unknown): string {
 
   if (/compute resources|worker_resource|546/i.test(lower)) {
     return withStep(
-      'Sunucu bu ünite için yetersiz kaldı. Biraz sonra tekrar dene (daha kısa üniteler daha sorunsuz).',
+      'Sunucu süresi/belleği doldu (Edge). Sayfayı yenile; her ünite ayrı kısa çağrıda yazılıyor.',
     )
   }
   if (/not valid json|json parse|ai response was not valid/i.test(raw)) {
