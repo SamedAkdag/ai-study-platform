@@ -21,17 +21,27 @@ const CALL_GAP_MS = 3000
 export async function createBookRecord(input: {
   title: string
   totalPages: number
+  subject?: string | null
+  sourceKind?: 'pdf' | 'topic'
+  progressStep?: string
 }) {
   const {
     data: { session },
   } = await supabase.auth.getSession()
+  const sourceKind = input.sourceKind || 'pdf'
   const { data, error } = await supabase
     .from('books')
     .insert({
       title: sanitizeForPostgres(input.title),
       total_pages: input.totalPages,
+      subject: input.subject
+        ? sanitizeForPostgres(input.subject)
+        : null,
       status: 'processing',
-      progress_step: 'extracting',
+      progress_step:
+        input.progressStep ||
+        (sourceKind === 'topic' ? 'topic_planning' : 'extracting'),
+      source_kind: sourceKind,
       user_id: session?.user?.id ?? null,
     })
     .select('*')
@@ -39,6 +49,38 @@ export async function createBookRecord(input: {
 
   if (error) throw error
   return data
+}
+
+/** Chat goal → topic units (no PDF). Fills chapters.page_text as SOURCE. */
+export async function createTopicStudy(input: {
+  bookId: string
+  goal: string
+  level?: string
+  depth?: 'one' | 'path'
+  subject?: string | null
+}) {
+  const { data, error } = await supabase.functions.invoke('create-topic-study', {
+    body: {
+      book_id: input.bookId,
+      goal: input.goal,
+      level: input.level || 'genel',
+      depth: input.depth || 'one',
+      subject: input.subject || undefined,
+    },
+  })
+
+  if (error) {
+    throw new Error(await extractFunctionsError(error, data))
+  }
+  if (data?.error) {
+    throw new Error(String(data.error))
+  }
+  return data as {
+    ok: boolean
+    book_id: string
+    book_title: string
+    chapters: Array<{ id: string; title: string; order_index: number | null }>
+  }
 }
 
 export async function segmentWindowsWithAi(

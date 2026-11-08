@@ -43,49 +43,81 @@ const CARDS: Card[] = [
 
 type Props = {
   chapterTitle?: string
-  onPick: (id: ReadStudioPick) => void
+  /** Showcase only — cards are not selectable. */
+  preview?: boolean
+  onPick?: (id: ReadStudioPick) => void
 }
 
 /**
  * Anlatım hub — 4 live preview panes; pick one to continue.
  */
-export default function ReadStudioLobby({ chapterTitle, onPick }: Props) {
+export default function ReadStudioLobby({
+  chapterTitle,
+  preview = false,
+  onPick,
+}: Props) {
   return (
-    <section className="read-lobby" aria-label="Anlatım araçları">
+    <section
+      className={`read-lobby${preview ? ' read-lobby--preview' : ''}`}
+      aria-label="Anlatım araçları"
+    >
       <header className="read-lobby__head">
         <p className="read-lobby__eyebrow">Anlatım stüdyosu</p>
         <h2 className="read-lobby__title">
-          Nasıl öğrenmek istersin?
+          {preview ? 'Nasıl öğreneceksin?' : 'Nasıl öğrenmek istersin?'}
         </h2>
         <p className="read-lobby__lead">
-          {chapterTitle
-            ? `“${chapterTitle}” için dört yol. Bir paneli seç — oradan devam.`
-            : 'Dört yol. Bir paneli seç — oradan devam.'}
+          {preview
+            ? 'Kaynağını seçince Anlatım bunlarla açılır — dört yol, sen seçersin.'
+            : chapterTitle
+              ? `“${chapterTitle}” için dört yol. Bir paneli seç — oradan devam.`
+              : 'Dört yol. Bir paneli seç — oradan devam.'}
         </p>
       </header>
 
       <div className="read-lobby__grid">
-        {CARDS.map((card) => (
-          <button
-            key={card.id}
-            type="button"
-            className={`read-lobby__card read-lobby__card--${card.demo}`}
-            onClick={() => onPick(card.id)}
-          >
-            <div className="read-lobby__stage" aria-hidden>
-              {card.demo === 'prose' ? <DemoProse /> : null}
-              {card.demo === 'map' ? <DemoMap /> : null}
-              {card.demo === 'guide' ? <DemoGuide /> : null}
-              {card.demo === 'audio' ? <DemoAudio /> : null}
-            </div>
-            <div className="read-lobby__meta">
-              <p className="read-lobby__card-eye">{card.eyebrow}</p>
-              <p className="read-lobby__card-title">{card.title}</p>
-              <p className="read-lobby__card-lead">{card.lead}</p>
-              <span className="read-lobby__go">Seç · devam et</span>
-            </div>
-          </button>
-        ))}
+        {CARDS.map((card) => {
+          const body = (
+            <>
+              <div className="read-lobby__stage" aria-hidden>
+                {card.demo === 'prose' ? <DemoProse /> : null}
+                {card.demo === 'map' ? <DemoMap /> : null}
+                {card.demo === 'guide' ? <DemoGuide /> : null}
+                {card.demo === 'audio' ? <DemoAudio /> : null}
+              </div>
+              <div className="read-lobby__meta">
+                <p className="read-lobby__card-eye">{card.eyebrow}</p>
+                <p className="read-lobby__card-title">{card.title}</p>
+                <p className="read-lobby__card-lead">{card.lead}</p>
+                {!preview ? (
+                  <span className="read-lobby__go">Seç · devam et</span>
+                ) : null}
+              </div>
+            </>
+          )
+
+          if (preview) {
+            return (
+              <div
+                key={card.id}
+                className={`read-lobby__card read-lobby__card--${card.demo} read-lobby__card--static`}
+              >
+                {body}
+              </div>
+            )
+          }
+
+          return (
+            <button
+              key={card.id}
+              type="button"
+              className={`read-lobby__card read-lobby__card--${card.demo}`}
+              onClick={() => onPick?.(card.id)}
+            >
+              {body}
+            </button>
+          )
+        })}
       </div>
     </section>
   )

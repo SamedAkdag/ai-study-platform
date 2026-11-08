@@ -67,6 +67,11 @@ export default function BookPage() {
     enabled: !!bookId,
   })
 
+  const isTopic =
+    bookQuery.data?.source_kind === 'topic' ||
+    (!bookQuery.data?.file_url &&
+      String(bookQuery.data?.progress_step || '').startsWith('topic'))
+
   const chaptersQuery = useQuery({
     queryKey: ['chapters', bookId],
     queryFn: () => fetchChapters(bookId!),
@@ -183,21 +188,29 @@ export default function BookPage() {
             <span className="muted text-xs">{progress}%</span>
           </div>
           <div className="book-hub__actions">
-            <Link to={`/books/${bookId}/read`} className="btn-primary text-sm">
-              PDF’den oku
-            </Link>
-            <button
-              type="button"
-              className="btn-ghost text-sm"
-              disabled={isProcessing}
-              onClick={() => setScopeOpen(true)}
-            >
-              {isProcessing
-                ? 'Üniteler oluşuyor…'
-                : chapters.length === 0
-                  ? 'Konuları oluştur'
-                  : 'Sayfa aralığı ekle'}
-            </button>
+            {isTopic ? (
+              <Link to={`/study/${bookId}`} className="btn-primary text-sm">
+                Çalışmaya git
+              </Link>
+            ) : (
+              <Link to={`/books/${bookId}/read`} className="btn-primary text-sm">
+                PDF’den oku
+              </Link>
+            )}
+            {!isTopic ? (
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                disabled={isProcessing}
+                onClick={() => setScopeOpen(true)}
+              >
+                {isProcessing
+                  ? 'Üniteler oluşuyor…'
+                  : chapters.length === 0
+                    ? 'Konuları oluştur'
+                    : 'Sayfa aralığı ekle'}
+              </button>
+            ) : null}
             {bookQuery.data && (
               <button
                 type="button"

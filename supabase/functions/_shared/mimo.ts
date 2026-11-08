@@ -240,32 +240,37 @@ export async function callMimo(
     )
   }
 
-  let lastErr = 'MiMo failed'
+  let lastErr = 'AI request failed'
   let useJson = !!opts.json
   // First attempt uses caller budget; if thinking ate it, one bump retry.
   let maxTokens = opts.maxTokens ?? 2500
+  // Novita Ling via Requesty often 400s on response_format / enable_thinking.
+  let stripThinkingFlags = false
 
   for (let attempt = 0; attempt <= RETRIES; attempt += 1) {
+    const payloadBody: Record<string, unknown> = {
+      model,
+      temperature: opts.temperature ?? 0.3,
+      max_tokens: maxTokens,
+      messages,
+    }
+    if (!stripThinkingFlags && reasoningEffort) {
+      payloadBody.reasoning_effort = reasoningEffort
+      if (reasoningEffort === 'none' || reasoningEffort === 'min') {
+        payloadBody.enable_thinking = false
+      }
+    }
+    if (useJson) {
+      payloadBody.response_format = { type: 'json_object' }
+    }
+
     const res = await fetch(`${baseURL}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model,
-        temperature: opts.temperature ?? 0.3,
-        max_tokens: maxTokens,
-        // Disable hybrid CoT by default (Requesty + Novita Ling).
-        ...(reasoningEffort
-          ? { reasoning_effort: reasoningEffort }
-          : {}),
-        enable_thinking: reasoningEffort === 'none' || reasoningEffort === 'min'
-          ? false
-          : undefined,
-        ...(useJson ? { response_format: { type: 'json_object' } } : {}),
-        messages,
-      }),
+      body: JSON.stringify(payloadBody),
     })
 
     const body = await res.text()
@@ -275,7 +280,7 @@ export async function callMimo(
       try {
         payload = JSON.parse(body)
       } catch {
-        lastErr = `MiMo returned non-JSON body: ${body.slice(0, 300)}`
+        lastErr = `AI returned non-JSON body: ${body.slice(0, 300)}`
         if (attempt < RETRIES) {
           await sleep(400 * (attempt + 1))
           continue
@@ -292,7 +297,7 @@ export async function callMimo(
         }
       }
 
-      lastErr = `Empty MiMo response — ${extracted.detail}`
+      lastErr = `Empty AI response — ${extracted.detail}`
       // length + empty usually means reasoning filled the budget
       if (
         attempt < RETRIES &&
@@ -305,17 +310,18 @@ export async function callMimo(
       throw new Error(lastErr)
     }
 
-    if (
-      useJson &&
-      (res.status === 400 || res.status === 422) &&
-      /response_format|json_object|unsupported|invalid/i.test(body)
-    ) {
-      console.warn('MiMo rejected response_format; retrying without JSON mode')
+    // Ling/Novita often returns opaque {"origin":"provider","message":"Bad Request"}
+    // for response_format json_object — same path PDF notes recover via llmCompleteJson.
+    if (useJson && (res.status === 400 || res.status === 422)) {
+      console.warn(
+        'Provider rejected JSON mode (or thinking flags); retrying plain chat',
+      )
       useJson = false
+      stripThinkingFlags = true
       continue
     }
 
-    lastErr = `MiMo error ${res.status}: ${body}`
+    lastErr = `AI error ${res.status}: ${body}`
     if (isRateLimited(res.status, body) && attempt < RETRIES) {
       await sleep(parseRetryMs(body))
       continue

@@ -11933,13 +11933,483 @@ html[data-theme='night'] .pdf-insert .study-callout {
 }
 
 /* —— Dumb-proof UI: upload / study desk / library / tools / coach —— */
+.upload-start {
+  width: min(100%, 56rem);
+  margin: 1.25rem auto 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
 .upload-hero {
   max-width: 36rem;
-  margin: 1.25rem auto 0;
+  width: 100%;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 1.35rem;
   align-items: stretch;
+}
+
+.upload-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+}
+
+.upload-preview__kicker {
+  margin: 0;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+}
+
+.upload-preview .read-lobby {
+  margin: 0;
+}
+
+.upload-preview .read-lobby__head {
+  max-width: none;
+  text-align: center;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.read-lobby__card--static {
+  cursor: default;
+  pointer-events: none;
+}
+
+.read-lobby--preview .read-lobby__card--static:hover {
+  transform: none;
+  border-color: color-mix(in srgb, var(--accent) 14%, var(--line));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.7) inset,
+    0 10px 28px rgba(28, 36, 44, 0.06);
+}
+
+/* Upload: PDF desk showcase (Ask AI storyboard) */
+.pdf-desk-lobby {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.pdf-desk-demo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pdf-desk-demo__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.pdf-desk-demo__badge {
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+  border-radius: 999px;
+  padding: 0.18rem 0.5rem;
+}
+
+.pdf-desk-demo__pause {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.pdf-desk-demo__stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.65rem;
+  padding: 0.7rem 0.7rem 1.45rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+  background:
+    radial-gradient(
+      ellipse 55% 70% at 12% 0%,
+      color-mix(in srgb, var(--accent-soft) 42%, transparent),
+      transparent 62%
+    ),
+    linear-gradient(165deg, #fbfaf7, #f2efe8);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.75) inset,
+    0 14px 32px rgba(28, 36, 44, 0.07);
+  overflow: hidden;
+}
+
+@media (min-width: 720px) {
+  .pdf-desk-demo__stage {
+    grid-template-columns: minmax(0, 1.35fr) minmax(11rem, 0.9fr);
+    align-items: stretch;
+    min-height: 14.5rem;
+    padding-bottom: 1.55rem;
+  }
+}
+
+.pdf-desk-demo__stage.is-asked {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+}
+
+.pdf-desk-demo__stage.is-paused {
+  filter: saturate(0.92);
+}
+
+.pdf-desk-demo__page {
+  position: relative;
+  min-height: 11rem;
+  padding: 0.65rem 0.6rem 0.75rem;
+  border-radius: 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, #c8c2b6);
+  background: linear-gradient(180deg, #fffcf7 0%, #f6f2ea 100%);
+  box-shadow: 0 6px 16px rgba(28, 36, 44, 0.06);
+  overflow: hidden;
+  transition: border-color 0.25s ease;
+}
+
+.pdf-desk-demo__page.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 38%, #c8c2b6);
+}
+
+.pdf-desk-demo__page-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8a8478;
+}
+
+.pdf-desk-demo__corner {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.28rem 0.55rem 0.28rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, rgba(255, 255, 255, 0.7));
+  background: color-mix(in srgb, #fff 82%, var(--accent-soft));
+  box-shadow: 0 4px 12px rgba(28, 36, 44, 0.1);
+  font-family: var(--font-display);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
+}
+
+.pdf-desk-demo__corner.is-ready {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 22%, transparent);
+  transform: scale(1.05);
+}
+
+.pdf-desk-demo__corner.is-fired {
+  background: color-mix(in srgb, var(--accent-soft) 65%, #fff);
+  transform: scale(0.97);
+}
+
+.pdf-desk-demo__orb {
+  width: 0.72rem;
+  height: 0.72rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    145deg,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 50%, var(--gold, #a67c52))
+  );
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: pdf-ask-pulse 2.2s ease-in-out infinite;
+}
+
+.pdf-desk-demo__passage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.18rem;
+  max-width: 16rem;
+  margin: 0;
+  padding: 0.35rem 0.4rem;
+  border-radius: 0.35rem;
+  transition: background 0.25s ease, box-shadow 0.25s ease;
+}
+
+.pdf-desk-demo__passage.is-on {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.pdf-desk-demo__line {
+  display: block;
+  font-family: 'Times New Roman', Times, Georgia, serif;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: #2a2a28;
+}
+
+.pdf-desk-demo__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin-top: 0.55rem;
+  animation: pdf-assist-demo-in 0.28s ease-out;
+}
+
+.pdf-desk-demo__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.48rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, #999);
+  background: #fff;
+  font-size: 0.64rem;
+  font-weight: 650;
+  color: #4a4a46;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.pdf-desk-demo__chip.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 55%, #fff);
+  color: var(--accent-deep);
+  font-weight: 750;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.pdf-desk-demo__chip.is-press {
+  transform: scale(0.94);
+}
+
+.pdf-desk-demo__cursor {
+  position: absolute;
+  z-index: 4;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 0 70% 70% 70%;
+  background: #1f2933;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  transform: rotate(-28deg);
+  pointer-events: none;
+}
+
+.pdf-desk-demo__cursor--hover {
+  left: 4.4rem;
+  top: 3.5rem;
+  animation: pdf-assist-cursor-in 0.45s ease-out;
+}
+
+.pdf-desk-demo__cursor--pick {
+  left: 5.3rem;
+  top: 4rem;
+  animation: pdf-assist-cursor-tap 0.55s ease;
+}
+
+.pdf-desk-demo__cursor--tap {
+  left: calc(100% - 3.5rem);
+  top: 0.65rem;
+  animation: pdf-assist-cursor-tap 0.55s ease;
+}
+
+.pdf-desk-demo__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-height: 8.5rem;
+  padding: 0.7rem 0.75rem;
+  border-radius: 0.7rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: color-mix(in srgb, var(--paper) 72%, var(--accent-soft));
+  transition:
+    border-color 0.25s ease,
+    background 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.pdf-desk-demo__rail.is-live {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, #fff 55%, var(--accent-soft));
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.pdf-desk-demo__rail-eye {
+  margin: 0;
+  font-size: 0.62rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+}
+
+.pdf-desk-demo__rail-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.pdf-desk-demo__rail-idle p {
+  margin: 0;
+}
+
+.pdf-desk-demo__rail-orb {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    145deg,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 50%, var(--gold, #a67c52))
+  );
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  animation: pdf-ask-pulse 2.2s ease-in-out infinite;
+}
+
+.pdf-desk-demo__reply {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  animation: pdf-assist-demo-in 0.32s ease-out;
+}
+
+.pdf-desk-demo__reply-label {
+  font-size: 0.62rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+}
+
+.pdf-desk-demo__reply p {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.pdf-desk-demo__listen {
+  margin-top: 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 750;
+  color: var(--accent-deep);
+}
+
+.pdf-desk-demo__progress {
+  position: absolute;
+  left: 0.7rem;
+  right: 0.7rem;
+  bottom: 0.4rem;
+  display: flex;
+  gap: 0.28rem;
+  justify-content: center;
+}
+
+.pdf-desk-demo__dot {
+  width: 0.32rem;
+  height: 0.32rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, #8a8478 45%, transparent);
+  transition: width 0.2s ease, background 0.2s ease;
+}
+
+.pdf-desk-demo__dot.is-on {
+  width: 0.85rem;
+  background: var(--accent-deep);
+}
+
+.pdf-desk-demo__status {
+  margin: 0;
+  text-align: center;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+  min-height: 2.2em;
+}
+
+.pdf-desk-lobby__features {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.65rem;
+}
+
+@media (min-width: 720px) {
+  .pdf-desk-lobby__features {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+  }
+}
+
+.pdf-desk-lobby__feat {
+  padding: 0.85rem 0.9rem;
+  border-radius: 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--line));
+  background: var(--paper);
+  box-shadow: 0 8px 20px rgba(28, 36, 44, 0.04);
+}
+
+.pdf-desk-lobby__feat-eye {
+  margin: 0 0 0.2rem;
+  font-size: 0.64rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+}
+
+.pdf-desk-lobby__feat-title {
+  margin: 0 0 0.25rem;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.pdf-desk-lobby__feat-lead {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-desk-demo__orb,
+  .pdf-desk-demo__rail-orb,
+  .pdf-desk-demo__cursor,
+  .pdf-desk-demo__reply,
+  .pdf-desk-demo__toolbar {
+    animation: none !important;
+  }
 }
 
 .upload-hero__lead {
@@ -11976,6 +12446,223 @@ html[data-theme='night'] .pdf-insert .study-callout {
 .upload-hero__cta:disabled {
   opacity: 0.72;
   cursor: wait;
+}
+
+.upload-hero__doors {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+@media (min-width: 640px) {
+  .upload-hero__doors {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.upload-hero__cta--topic {
+  border-style: solid;
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--paper) 55%, var(--accent-soft)),
+    var(--paper)
+  );
+}
+
+.upload-hero__back {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  cursor: pointer;
+}
+
+.upload-hero__phase {
+  margin: 0;
+  text-align: center;
+  font-size: 0.88rem;
+  font-weight: 650;
+  color: var(--accent-deep);
+}
+
+.topic-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1rem 1.05rem 1.15rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+  background:
+    radial-gradient(
+      ellipse 70% 55% at 12% 0%,
+      color-mix(in srgb, var(--accent-soft) 55%, transparent),
+      transparent 60%
+    ),
+    var(--paper);
+}
+
+.topic-chat__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.topic-chat__eyebrow {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+}
+
+.topic-chat__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+}
+
+.topic-chat__lead {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.topic-chat__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.topic-chat__dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink-soft) 45%, transparent);
+}
+
+.topic-chat__dot.is-done {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.topic-chat__dot.is-on {
+  width: 1rem;
+  background: var(--accent-deep);
+}
+
+.topic-chat__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.topic-chat__label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.topic-chat__input {
+  resize: vertical;
+  min-height: 4.5rem;
+}
+
+.topic-chat__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.topic-chat__choices {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+}
+
+@media (min-width: 520px) {
+  .topic-chat__choices {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.topic-chat__choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  text-align: left;
+  padding: 0.75rem 0.85rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--line);
+  background: var(--surface-solid, #fff);
+  cursor: pointer;
+}
+
+.topic-chat__choice strong {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.topic-chat__choice span {
+  font-size: 0.76rem;
+  color: var(--ink-muted);
+}
+
+.topic-chat__choice.is-on {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 55%, #fff);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.topic-chat__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--accent-soft) 35%, #fff);
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--line));
+}
+
+.topic-chat__summary p {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.topic-chat__summary span {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 0.1rem;
+}
+
+.topic-chat__note {
+  margin: 0;
+}
+
+.topic-chat__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
 }
 
 .upload-hero__cta-icon {

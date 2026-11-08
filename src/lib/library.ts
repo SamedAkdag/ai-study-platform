@@ -9,6 +9,8 @@ export type LibraryItem = {
   shareToken: string | null
   isPublic: boolean
   source: 'mine' | 'shared' | 'group'
+  /** pdf (default) | topic */
+  kind?: 'pdf' | 'topic'
   href: string
   addedAt: string
 }
@@ -156,6 +158,7 @@ export function libraryHref(item: {
   shareToken: string | null
   isPublic?: boolean
   source: LibraryItem['source']
+  kind?: 'pdf' | 'topic'
 }) {
   if (
     (item.source === 'shared' || item.source === 'group') &&
@@ -164,6 +167,7 @@ export function libraryHref(item: {
   ) {
     return `/s/${item.shareToken}`
   }
+  if (item.kind === 'topic') return `/study/${item.bookId}`
   if (item.source === 'mine') return `/books/${item.bookId}/read`
   if (item.shareToken) return `/s/${item.shareToken}`
   return `/books/${item.bookId}/read`
@@ -181,12 +185,15 @@ export async function fetchMyLibrary(userId?: string | null): Promise<LibraryIte
   if (userId) {
     const { data: mine } = await supabase
       .from('books')
-      .select('id, title, subject, status, share_token, is_public, created_at')
+      .select(
+        'id, title, subject, status, share_token, is_public, created_at, source_kind, file_url',
+      )
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(40)
 
     for (const b of mine ?? []) {
+      const kind = b.source_kind === 'topic' ? 'topic' : 'pdf'
       byId.set(b.id, {
         bookId: b.id,
         title: b.title,
@@ -195,7 +202,14 @@ export async function fetchMyLibrary(userId?: string | null): Promise<LibraryIte
         shareToken: b.share_token,
         isPublic: !!b.is_public,
         source: 'mine',
-        href: `/books/${b.id}/read`,
+        kind,
+        href: libraryHref({
+          bookId: b.id,
+          shareToken: b.share_token,
+          isPublic: !!b.is_public,
+          source: 'mine',
+          kind,
+        }),
         addedAt: b.created_at,
       })
     }

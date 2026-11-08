@@ -18,6 +18,7 @@ export type AiUsageOperation =
   | 'chapter_chat'
   | 'segment'
   | 'pack'
+  | 'topic_study'
   | 'other'
 
 export type UsageBag = {

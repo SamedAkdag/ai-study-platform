@@ -1,12 +1,16 @@
 export type BookStatus = 'processing' | 'ready' | 'failed'
 export type ChapterStatus = 'pending' | 'generating' | 'ready' | 'failed'
 
+export type BookSourceKind = 'pdf' | 'topic'
+
 export type Book = {
   id: string
   user_id: string | null
   title: string
   subject: string | null
   file_url: string | null
+  /** pdf (default) | topic — chat-built study without a file */
+  source_kind: BookSourceKind | null
   total_pages: number | null
   status: BookStatus
   progress_step: string | null
@@ -107,6 +111,7 @@ export type AiUsageOperation =
   | 'chapter_chat'
   | 'segment'
   | 'pack'
+  | 'topic_study'
   | 'other'
 
 export type AiUsageEvent = {
@@ -310,6 +315,7 @@ export type Database = {
           title: string
           subject?: string | null
           file_url?: string | null
+          source_kind?: BookSourceKind | null
           total_pages?: number | null
           status?: BookStatus
           progress_step?: string | null

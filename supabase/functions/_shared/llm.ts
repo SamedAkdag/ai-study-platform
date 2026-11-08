@@ -318,8 +318,7 @@ export async function llmComplete(opts: {
 
     if (!allowFallback) {
       throw new Error(
-        `MiMo failed (${mimoModel} @ ${baseURL}): ${msg}. ` +
-          'No fallback (set ALLOW_LLM_FALLBACK=true only if you want Groq/Gemini).',
+        `AI failed (${mimoModel}): ${msg}`,
       )
     }
 

@@ -37,8 +37,22 @@ export function friendlyAiError(err: unknown): string {
   if (/no page_text|cannot generate/i.test(lower)) {
     return 'Bu ünite için PDF metni yok — taranmış PDF olabilir veya metin çıkarılamadı.'
   }
-  if (/tokenharbor|mimo|api.?key|edge secrets/i.test(lower)) {
+  // Only real missing-secret / misconfig — do NOT match "MiMo failed" runtime errors.
+  if (
+    /edge secrets|is not set in edge|(api.?key|secret).{0,40}(missing|not set)|(missing|not set).{0,40}(api.?key|secret)/i.test(
+      lower,
+    )
+  ) {
     return 'AI servisi yapılandırma hatası. Biraz sonra tekrar dene.'
+  }
+  if (/unauthorized|401|invalid.?api.?key|incorrect.?api.?key/i.test(lower)) {
+    return 'AI anahtarı reddedildi. Biraz sonra tekrar dene veya ayarları kontrol et.'
+  }
+  if (/empty (mimo|ai)?\s*response|empty content/i.test(lower)) {
+    return 'AI boş yanıt döndü. Bir kez daha dene.'
+  }
+  if (/ai error 400|bad request|provider/i.test(lower) && /400|bad request/i.test(lower)) {
+    return 'AI isteği reddedildi. Bir kez daha dene; sürmezse kısa bir konu yaz.'
   }
   if (raw.length > 180) return `${raw.slice(0, 160)}…`
   return raw || 'Üretim başarısız — tekrar dene.'

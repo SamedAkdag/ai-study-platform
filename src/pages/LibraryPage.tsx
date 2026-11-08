@@ -37,9 +37,9 @@ export default function LibraryPage() {
 
         {empty ? (
           <div className="library-page__empty">
-            <p className="library-page__empty-title">İlk kaynağını yükle</p>
+            <p className="library-page__empty-title">İlk çalışmanı başlat</p>
             <Link to="/" className="btn-primary">
-              PDF’ini Yükle
+              PDF veya konu
             </Link>
           </div>
         ) : (

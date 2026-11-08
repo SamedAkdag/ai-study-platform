@@ -73,7 +73,7 @@ function ShelfRow({
           {item.title}
         </p>
         <p className="muted text-[11px]">
-          {sourceLabel(item.source)}
+          {item.kind === 'topic' ? 'Konu' : sourceLabel(item.source)}
           {item.subject ? ` · ${subjectLabel(item.subject)}` : ''}
           {progressHint ? ` · ${progressHint}` : ''}
         </p>
@@ -90,7 +90,9 @@ function ShelfRow({
           disabled={deleting}
           title={
             item.source === 'mine'
-              ? 'PDF’yi kalıcı sil'
+              ? item.kind === 'topic'
+                ? 'Konu çalışmasını sil'
+                : 'PDF’yi kalıcı sil'
               : 'Raftan kaldır'
           }
           onClick={() => onRemove(item)}
