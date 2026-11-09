@@ -19,6 +19,21 @@ export type TeachPattern =
 
 export type TopicPurpose = 'exam' | 'understand' | 'homework' | 'review'
 
+/** User answers that lock teaching angle / scope before generation. */
+export type TopicLock = {
+  id: string
+  question: string
+  answer: string
+  optionId: string
+}
+
+export type TopicClarifyQuestion = {
+  id: string
+  prompt: string
+  why: string
+  options: Array<{ id: string; label: string }>
+}
+
 export type TopicBriefIn = {
   goal: string
   level: string
@@ -26,6 +41,48 @@ export type TopicBriefIn = {
   minutes: number
   purpose: TopicPurpose
   subjectHint?: string
+  /** Dynamic lock answers from clarify step. */
+  locks?: TopicLock[]
+}
+
+export function normalizeLocks(raw: unknown): TopicLock[] {
+  if (!Array.isArray(raw)) return []
+  const out: TopicLock[] = []
+  for (let i = 0; i < raw.length && out.length < 6; i += 1) {
+    const row = raw[i]
+    if (!row || typeof row !== 'object') continue
+    const r = row as Record<string, unknown>
+    const question = sanitizeText(String(r.question || r.prompt || ''), 220)
+    const answer = sanitizeText(String(r.answer || r.label || ''), 160)
+    if (!question || !answer) continue
+    out.push({
+      id:
+        sanitizeText(String(r.id || `lock${i + 1}`), 32).replace(/\s+/g, '_') ||
+        `lock${i + 1}`,
+      question,
+      answer,
+      optionId: sanitizeText(String(r.optionId || r.option_id || ''), 40),
+    })
+  }
+  return out
+}
+
+/** Hard rule: user's stated topic is the center, not a tour of neighbors. */
+export function centerFocusRules(goal: string): string {
+  const g = sanitizeText(goal, 200) || 'verilen konu'
+  return `MERKEZ KURALI (ZORUNLU):
+- Kullanıcının verdiği konu TEK MERKEZDİR: «${g}»
+- Anlatım bu konunun kendisine odaklanır. Yan / bağlantılı / önkoşul konular ana omurga OLAMAZ.
+- Bağlantılar yalnızca merkezi anlamak için en fazla 1–2 cümle köprü olabilir; ayrı ünite veya ana bölüm yapma.
+- book_title, core_claim, must_learn ve concepts[0] merkeze bağlansın.
+- concepts içindeki diğer öğeler merkezin ALT BİLEŞENLERİ olsun (komşu ders konuları değil).`
+}
+
+export function locksBlock(brief: TopicBriefIn): string {
+  if (!brief.locks?.length) return ''
+  return `KİLİT CEVAPLAR (süreci bunlara göre kilitle — sapma YASAK):
+${brief.locks.map((l) => `- ${l.question} → ${l.answer}`).join('\n')}
+`
 }
 
 export type LearningCharter = {
@@ -349,19 +406,129 @@ export function normalizeCharter(
   }
 }
 
+// ——— Stage A0: CLARIFY (lock-in questions) ———
+
+export function clarifySystemPrompt(): string {
+  return `Sen Studium brifing ajanısın. Üretim başlamadan önce süreci KİLİTLEYECEK 2–3 soru üret.
+
+Kurallar:
+- Sorular kullanıcının verdiği konuya ÖZEL (şablon / genel gevezelik yok)
+- Her soru bir kırılma noktası: anlatım açısı, kapsam sınırı, yöntem veya öncelik
+- Merkez konu sabittir; sorular «bu merkeze nasıl girelim / neyi dışarıda bırakelim?» tipinde
+- Her soruda 2–4 kısa, tıklanabilir seçenek
+- Komşu konulara kaydıran seçenekler üretme
+- Çıktı SADECE JSON`
+}
+
+export function clarifyUserPrompt(brief: TopicBriefIn): string {
+  return `Merkez konu: ${brief.goal}
+Seviye: ${brief.level}
+Amaç: ${brief.purpose}
+Süre: ${brief.minutes} dk
+Yapı: ${brief.depth === 'path' ? 'öğrenme yolu' : 'tek ünite'}
+${brief.subjectHint ? `Ders: ${brief.subjectHint}\n` : ''}
+${centerFocusRules(brief.goal)}
+
+JSON:
+{
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "kısa soru",
+      "why": "bu cevap planı nasıl kilitler (1 cümle)",
+      "options": [
+        { "id": "a", "label": "kısa seçenek" },
+        { "id": "b", "label": "kısa seçenek" }
+      ]
+    }
+  ]
+}`
+}
+
+export function normalizeClarifyQuestions(
+  raw: unknown,
+  brief: TopicBriefIn,
+): TopicClarifyQuestion[] {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<
+    string,
+    unknown
+  >
+  const list = Array.isArray(o.questions) ? o.questions : []
+  const out: TopicClarifyQuestion[] = []
+  for (let i = 0; i < list.length && out.length < 3; i += 1) {
+    const item = list[i]
+    if (!item || typeof item !== 'object') continue
+    const q = item as Record<string, unknown>
+    const prompt = sanitizeText(String(q.prompt || q.question || ''), 180)
+    if (!prompt) continue
+    const optsRaw = Array.isArray(q.options) ? q.options : []
+    const options: Array<{ id: string; label: string }> = []
+    for (let j = 0; j < optsRaw.length && options.length < 4; j += 1) {
+      const opt = optsRaw[j]
+      if (!opt || typeof opt !== 'object') continue
+      const oo = opt as Record<string, unknown>
+      const label = sanitizeText(String(oo.label || oo.text || ''), 100)
+      if (!label) continue
+      options.push({
+        id:
+          sanitizeText(String(oo.id || String.fromCharCode(97 + j)), 24) ||
+          String.fromCharCode(97 + j),
+        label,
+      })
+    }
+    if (options.length < 2) continue
+    out.push({
+      id:
+        sanitizeText(String(q.id || `q${i + 1}`), 24).replace(/\s+/g, '_') ||
+        `q${i + 1}`,
+      prompt,
+      why: sanitizeText(String(q.why || ''), 160),
+      options,
+    })
+  }
+
+  if (out.length > 0) return out
+
+  // Deterministic fallback so UI never blocks
+  const g = brief.goal.slice(0, 60) || 'bu konu'
+  return [
+    {
+      id: 'q_focus',
+      prompt: `«${g}» için bu oturumda neye kilitlenelim?`,
+      why: 'Kapsamı merkeze çeker',
+      options: [
+        { id: 'core', label: 'Sadece merkez konu — yanlara girme' },
+        { id: 'bridge', label: 'Merkez + 1 kısa köprü (önkoşul)' },
+        { id: 'exam', label: 'Merkez + sınav kalıbı / tuzak' },
+      ],
+    },
+    {
+      id: 'q_style',
+      prompt: 'Anlatım tarzı hangisi olsun?',
+      why: 'Üretim kalıbını kilitler',
+      options: [
+        { id: 'why', label: 'Neden–nasıl (kavram)' },
+        { id: 'how', label: 'Adım adım (prosedür)' },
+        { id: 'ex', label: 'Örnek üzerinden' },
+      ],
+    },
+  ]
+}
+
 // ——— Stage B: RESEARCH ———
 
 export function researchSystemPrompt(): string {
-  return `Sen Studium konu araştırma ajanısın. PDF yok. Görevin: charter + brief’ten ÇALIŞILABİLİR kavram haritası çıkarmak.
+  return `Sen Studium konu araştırma ajanısın. PDF yok. Görevin: brief + kilit cevaplardan ÇALIŞILABİLİR kavram haritası çıkarmak.
 
 Yap:
-- Konuya özel kavramlar (genel gevezelik yok)
+- MERKEZ konuya özel kavramlar (komşu konulara sapma YASAK)
+- concepts[0] = merkez konu; diğerleri merkezin parçaları
 - Her kavram: essence + why + links + learn_order
 - connections, misconceptions, worked_seeds
-- must_learn: ölçülebilir kazanımlar
+- must_learn: ölçülebilir kazanımlar (merkeze dair)
 - pattern öner
 
-Uzun anlatım YOK — araştırma JSON. Kullanıcının “şu kavramları da ekle / bağla / yanılgıları yaz” prompt’larını sen doldur.`
+Uzun anlatım YOK — araştırma JSON.`
 }
 
 export function researchUserPrompt(
@@ -381,7 +548,8 @@ audience: ${charter.audience_constraints}
 `
     : ''
 
-  return `${charterBlock}Ham hedef: ${brief.goal}
+  return `${charterBlock}${centerFocusRules(brief.goal)}
+${locksBlock(brief)}Ham hedef (MERKEZ): ${brief.goal}
 Seviye: ${brief.level} · Amaç: ${brief.purpose}
 Süre: ${brief.minutes} dk (${capacity.label}) · mod ${capacity.mode}
 Ünite: ${capacity.unitCount.min}–${capacity.unitCount.max}
@@ -389,27 +557,27 @@ Kavram hedefi: ${capacity.conceptTarget.min}–${capacity.conceptTarget.max}
 ${brief.subjectHint ? `Ders: ${brief.subjectHint}\n` : ''}
 JSON:
 {
-  "book_title": "kısa başlık",
+  "book_title": "merkeze bağlı kısa başlık",
   "subject": "ders veya null",
   "pattern": "concept|procedure|compare|system|timeline|applied",
   "pattern_reason": "1 cümle",
   "audience_note": "1 cümle",
-  "core_claim": "ustalık tek cümle",
-  "prerequisites": ["…"],
+  "core_claim": "merkez konudaki ustalık tek cümle",
+  "prerequisites": ["yalnızca 1–2 kısa köprü veya boş"],
   "concepts": [
     {
       "id": "c1",
-      "name": "Kavram",
+      "name": "MERKEZ konu adı",
       "essence": "ne (1–2 cümle)",
       "why": "neden bu hedef için",
       "links_to": ["c2"],
       "learn_order": 1
     }
   ],
-  "connections": [{"from":"c1","to":"c2","relation":"önkoşul|karşıt|parça|sonuç"}],
+  "connections": [{"from":"c1","to":"c2","relation":"parça|sonuç"}],
   "misconceptions": ["yanlış → doğru"],
   "worked_seeds": ["örnek tohumu"],
-  "must_learn": ["ölçülebilir kazanım"]
+  "must_learn": ["merkeze dair ölçülebilir kazanım"]
 }`
 }
 
@@ -456,14 +624,16 @@ export function normalizeResearch(
     })
   }
 
+  // Force center: concepts[0] must be the user's goal (not a neighbor topic)
+  const centerName = sanitizeText(brief.goal, 100) || 'Merkez konu'
   if (concepts.length === 0) {
-    const g = brief.goal.slice(0, 80)
+    const g = centerName.slice(0, 80)
     concepts.push(
       {
         id: 'c1',
         name: g,
         essence: `${g} çekirdek tanımı`,
-        why: 'Hedef omurgası',
+        why: 'Kullanıcının verdiği merkez',
         links_to: ['c2'],
         learn_order: 1,
       },
@@ -479,7 +649,32 @@ export function normalizeResearch(
   }
 
   concepts.sort((a, b) => a.learn_order - b.learn_order)
+  // Pin user goal as first concept name if model drifted to a neighbor
+  if (concepts.length > 0) {
+    const head = concepts[0]!
+    const goalLower = centerName.toLowerCase()
+    const headLower = head.name.toLowerCase()
+    const centered =
+      headLower.includes(goalLower.slice(0, Math.min(18, goalLower.length))) ||
+      goalLower.includes(headLower.slice(0, Math.min(18, headLower.length)))
+    if (!centered) {
+      concepts.unshift({
+        id: 'c0',
+        name: centerName,
+        essence: `${centerName} — oturumun tek merkezi`,
+        why: 'Kullanıcının verdiği konu',
+        links_to: [head.id],
+        learn_order: 0,
+      })
+    } else {
+      head.name = centerName
+      head.why = head.why || 'Kullanıcının verdiği merkez'
+      head.learn_order = 1
+    }
+  }
   const capped = concepts.slice(0, capacity.conceptTarget.max)
+  // Keep prerequisites short — bridges only, not a second curriculum
+  const prerequisites = asStringArray(o.prerequisites, 2, 100)
 
   const connectionsRaw = Array.isArray(o.connections) ? o.connections : []
   const connections: TopicResearch['connections'] = []
@@ -510,8 +705,16 @@ export function normalizeResearch(
       .map((c) => `${c.name}: ${c.essence.slice(0, 80)}`)
   }
 
+  const titleFromGoal =
+    sanitizeText(brief.goal, 120) || bookTitle
+  const finalTitle =
+    bookTitle.toLowerCase().includes(centerName.slice(0, 12).toLowerCase()) ||
+    centerName.toLowerCase().includes(bookTitle.slice(0, 12).toLowerCase())
+      ? bookTitle
+      : titleFromGoal
+
   return {
-    book_title: bookTitle,
+    book_title: finalTitle,
     subject,
     pattern: normalizePattern(o.pattern),
     pattern_reason:
@@ -523,7 +726,7 @@ export function normalizeResearch(
     core_claim:
       sanitizeText(String(o.core_claim || ''), 280) ||
       `${brief.goal} konusunda temel yeterlilik`,
-    prerequisites: asStringArray(o.prerequisites, 6, 120),
+    prerequisites,
     concepts: capped,
     connections: connections.slice(0, 28),
     misconceptions: asStringArray(o.misconceptions, 8, 200),
@@ -649,11 +852,14 @@ export function clusterResearchIntoUnits(
 
 export function curriculumSystemPrompt(): string {
   return `Sen Studium müfredat mimarı ajanısın. Araştırma grafiğini SÜREYE YAYILMIŞ oturum planına çevirirsin.
-Aynı yanıtta kısa bir learning charter da üret (kullanıcının 3–4 netleştirme prompt’u yerine).
+Aynı yanıtta kısa bir learning charter da üret.
+
+ZORUNLU: Kullanıcının verdiği merkez konuyu anlat — komşu konulara müfredat açma.
+Kilit cevaplar varsa planı onlara kilitle.
 
 Her ünite (arc):
 - minutes (toplam brief.minutes’a yakın)
-- timed_beats: 3–6 adım (dakika + focus)
+- timed_beats: 3–6 adım (dakika + focus) — hepsi merkez etrafında
 - must_cover + deep_dives
 - teacher_prompts (3–5)
 - checkpoint, practice_prompt, worked_example
@@ -676,7 +882,8 @@ export function curriculumUserPrompt(input: {
     )
     .join('\n')
 
-  return `Süre: ${brief.minutes} dk · ${capacity.label} · mod ${capacity.mode}
+  return `${centerFocusRules(brief.goal)}
+${locksBlock(brief)}Süre: ${brief.minutes} dk · ${capacity.label} · mod ${capacity.mode}
 Ünite sayısı: TAM ${capacity.unitCount.max}
 Amaç: ${brief.purpose} · Seviye: ${brief.level}
 ${charter ? `Charter hedef: ${charter.refined_goal}\nStance: ${charter.teaching_stance}\nSuccess: ${charter.success_criteria.join(' · ')}\n` : ''}
@@ -686,7 +893,7 @@ must_learn: ${research.must_learn.join(' · ')}
 misconceptions: ${research.misconceptions.join(' || ')}
 seeds: ${research.worked_seeds.join(' | ')}
 
-Kavramlar:
+Kavramlar (c1/ilk = MERKEZ):
 ${conceptLines}
 
 JSON:
@@ -873,6 +1080,8 @@ ${purposeLens(purpose)}
 ${depthNote}
 
 Kurallar:
+- MERKEZ konuyu anlat; bağlantılı konulara kayma — en fazla 1–2 cümle köprü.
+- Kilit cevaplar varsa onlara uy.
 - Charter/araştırma/müfredattaki somut noktaları KULLAN.
 - Türkçe; ## başlık + madde + açıklayıcı paragraf (sadece madde listesi yetmez).
 - Nicel: varsayım, formül düz metin, mini sayısal adım.
@@ -910,8 +1119,9 @@ export function writeUnitUserPrompt(input: {
           .join('\n')
       : '—'
 
-  return `Kitap: ${outline.book_title}
-Ham hedef: ${brief.goal}
+  return `${centerFocusRules(brief.goal)}
+${locksBlock(brief)}Kitap: ${outline.book_title}
+Ham hedef (MERKEZ): ${brief.goal}
 ${charter ? `Charter: ${charter.refined_goal}\nStance: ${charter.teaching_stance}\n` : ''}
 Ustalık: ${outline.core_claim}
 Seviye: ${brief.level} · Amaç: ${brief.purpose} · Toplam ${brief.minutes} dk · mod ${mode}

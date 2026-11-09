@@ -1,10 +1,8 @@
 /**
  * Hybrid Toplu üret (Edge-safe):
- *   phase "warm" (default) = notes + detailed in ONE isolate
- *     → notes Cache Miss, detailed Cache Hit, worker stays under 546 limits
- *   Client then calls brief / practice / mind_map separately (should Hit).
- *
- * phase "full" = all kinds in-process (may 546 on free/small workers — avoid).
+ *   phase "warm" = single Anlatım (detail comes from time budget in SOURCE)
+ *   Client then loads practice / mind_map on demand.
+ *   phase "full" = practice + mind_map in-process (heavier).
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1'
@@ -22,8 +20,6 @@ import {
   estimatePrefixTokens,
   fixedSourceFingerprint,
   isTopicPageText,
-  taskBrief,
-  taskDetailedOneShot,
   taskPractice,
 } from './cacheableChapter.ts'
 import { buildStagedNotes } from './notesPipeline.ts'
@@ -102,7 +98,7 @@ export async function runChapterBundle(
     style?: string
     titleHint?: string
     forceArtifacts?: boolean
-    /** warm = notes+detailed (safe); full = all 5 LLM (may 546) */
+    /** warm = notes only; full = practice + mind_map extras (no fake depth copies) */
     phase?: 'warm' | 'full'
   },
 ): Promise<{
@@ -126,10 +122,9 @@ export async function runChapterBundle(
   const titleHint = String(input.titleHint || '').trim()
   const force = input.forceArtifacts !== false
   const phase = input.phase === 'full' ? 'full' : 'warm'
+  // Depth chips removed: one Anlatım. Warm = notes only; client loads practice/map.
   const kinds: ArtifactKind[] =
-    phase === 'full'
-      ? ['detailed', 'brief', 'practice', 'mind_map']
-      : ['detailed']
+    phase === 'full' ? ['practice', 'mind_map'] : []
 
   const bookCtx = await resolveBookContext(admin, chapterId)
 
@@ -221,8 +216,9 @@ export async function runChapterBundle(
   const { error: notesUpErr } = await admin
     .from('chapters')
     .update({
-      explanation: k2.slice(0, 24_000),
-      explanation_detailed: staged.staged ? k2.slice(0, 36_000) : null,
+      explanation: k2.slice(0, 36_000),
+      explanation_detailed: null,
+      explanation_brief: null,
       key_concepts: keyConcepts.length ? keyConcepts : null,
       page_sources: pageSources,
       status: 'ready',
@@ -267,51 +263,16 @@ export async function runChapterBundle(
   }> = []
 
   let explanation = k2
-  let explanationDetailed = staged.staged ? k2.slice(0, 36_000) : ''
   let currentPageSources = pageSources
   let currentConcepts = keyConcepts
 
   for (const kind of kinds) {
     const bag = createUsageBag()
     try {
-      if (kind === 'detailed') {
-        // Staged Anlatım already deep — skip extra one-shot (Edge 546 risk).
-        if (staged.staged && explanationDetailed.trim()) {
-          artifacts.push({
-            kind: 'detailed',
-            ok: true,
-            cached_db: true,
-          })
-          continue
-        }
-        const filled = await askCacheableJson({
-          fixedSource,
-          task: taskDetailedOneShot(style, topicSource),
-        })
-        recordUsage(bag, filled.usage, filled.provider)
-        const markdown = String(
-          filled.value.markdown || filled.value.k3 || '',
-        ).trim()
-        if (!markdown) throw new Error('Detay üretilemedi')
-        explanationDetailed = markdown.slice(0, 36_000)
-        await admin
-          .from('chapters')
-          .update({ explanation_detailed: explanationDetailed })
-          .eq('id', chapterId)
-      } else if (kind === 'brief') {
-        const parsed = await askCacheableJson({
-          fixedSource,
-          task: taskBrief(style),
-        })
-        recordUsage(bag, parsed.usage, parsed.provider)
-        const markdown = String(
-          parsed.value.markdown || parsed.value.k1 || '',
-        ).trim()
-        if (!markdown) throw new Error('Özet üretilemedi')
-        await admin
-          .from('chapters')
-          .update({ explanation_brief: markdown.slice(0, 12_000) })
-          .eq('id', chapterId)
+      if (kind === 'brief' || kind === 'detailed') {
+        // Legacy kinds — skipped; time budget owns depth
+        artifacts.push({ kind, ok: true, cached_db: true })
+        continue
       } else if (kind === 'practice') {
         const parsed = await askCacheableJson({
           fixedSource,
@@ -350,7 +311,7 @@ export async function runChapterBundle(
           title,
           pageText: rawText,
           pageSources: currentPageSources,
-          notesMarkdown: explanationDetailed || explanation,
+          notesMarkdown: explanation,
           concepts: currentConcepts,
           askJson: async (task) => {
             const one = await askCacheableJson({ fixedSource, task })
@@ -417,7 +378,7 @@ export async function runChapterBundle(
   }
 
   const remaining_kinds: ArtifactKind[] =
-    phase === 'warm' ? ['brief', 'practice', 'mind_map'] : []
+    phase === 'warm' ? ['practice', 'mind_map'] : []
 
   return {
     ok: true,

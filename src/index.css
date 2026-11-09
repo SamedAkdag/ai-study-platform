@@ -12752,6 +12752,24 @@ html[data-theme='night'] .pdf-insert .study-callout {
   color: var(--ink-muted);
 }
 
+.topic-chat__clarify-q {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0 0 0.35rem;
+}
+
+.topic-chat__clarify-q strong {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--ink);
+}
+
+.topic-chat__clarify-q span {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
 .topic-chat__choice.is-on {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   background: color-mix(in srgb, var(--accent-soft) 55%, #fff);

@@ -154,6 +154,7 @@ export default function UploadPage() {
         minutes: brief.minutes,
         purpose: brief.purpose,
         subject: subject.trim() || null,
+        locks: brief.locks,
         onStage: (info) => setPhase(info.label),
       })
 
@@ -323,6 +324,7 @@ export default function UploadPage() {
               ) : null}
               <TopicStudyChat
                 busy={busy}
+                subject={subject.trim() || null}
                 onCancel={() => {
                   setEntry('pick')
                   setError(null)

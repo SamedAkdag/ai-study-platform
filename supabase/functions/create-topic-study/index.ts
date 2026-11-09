@@ -15,10 +15,14 @@ import {
   type UsageBag,
 } from '../_shared/aiUsage.ts'
 import {
+  clarifySystemPrompt,
+  clarifyUserPrompt,
   clusterResearchIntoUnits,
   curriculumSystemPrompt,
   curriculumUserPrompt,
+  normalizeClarifyQuestions,
   normalizeCurriculum,
+  normalizeLocks,
   normalizeMinutes,
   normalizePurpose,
   normalizeResearch,
@@ -49,6 +53,7 @@ const corsHeaders = {
 
 type TopicStage =
   | 'auto'
+  | 'clarify'
   | 'research'
   | 'curriculum'
   | 'process_next'
@@ -114,6 +119,7 @@ serve(async (req) => {
     if (
       ![
         'auto',
+        'clarify',
         'research',
         'curriculum',
         'process_next',
@@ -132,13 +138,8 @@ serve(async (req) => {
     const minutes = normalizeMinutes(body?.minutes)
     const purpose = normalizePurpose(body?.purpose)
     const subjectHint = sanitizeText(String(body?.subject || ''), 80)
+    const locks = normalizeLocks(body?.locks)
 
-    if (!bookId) {
-      return new Response(JSON.stringify({ error: 'book_id required' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
     // process_next reads brief from DB — skip strict goal check
     if (stage !== 'process_next' && goal.length < 3) {
       return new Response(JSON.stringify({ error: 'goal required' }), {
@@ -154,10 +155,45 @@ serve(async (req) => {
       minutes,
       purpose,
       subjectHint: subjectHint || undefined,
+      locks: locks.length ? locks : undefined,
     }
     const capacity = planCapacity(brief)
 
     const admin = createClient(supabaseUrl, serviceKey)
+
+    // ——— CLARIFY (1 LLM, no book required) — lock-in questions ———
+    if (stage === 'clarify') {
+      pipelineStep = 'topic_clarify'
+      const clarifyRes = await llmCompleteJson({
+        messages: [
+          { role: 'system', content: clarifySystemPrompt() },
+          { role: 'user', content: clarifyUserPrompt(brief) },
+        ],
+        temperature: 0.4,
+        maxTokens: 900,
+        retries: 0,
+        skipRepairCall: true,
+      })
+      const questions = normalizeClarifyQuestions(clarifyRes.value, brief)
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          done: false,
+          next_stage: 'research',
+          questions,
+          center: brief.goal,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
+    if (!bookId) {
+      return new Response(JSON.stringify({ error: 'book_id required' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
     const { data: book, error: bookErr } = await admin
       .from('books')
       .select('id, title, status, user_id, pipeline_state')
@@ -177,6 +213,7 @@ serve(async (req) => {
       stage,
       model: mimoModel,
       baseURL,
+      locks: locks.length,
     })
 
     // ——— RESEARCH (1 LLM) ———

@@ -510,8 +510,9 @@ serve(async (req) => {
       const { error: updateError } = await admin
         .from('chapters')
         .update({
-          explanation: k2.slice(0, 24_000),
-          explanation_detailed: k2.slice(0, 36_000),
+          explanation: k2.slice(0, 36_000),
+          // Detail = time budget in SOURCE; no duplicate depth columns
+          explanation_detailed: null,
           key_concepts: keyConcepts.length ? keyConcepts : null,
           page_sources: pageSources,
           explanation_brief: null,
@@ -602,8 +603,8 @@ serve(async (req) => {
     const { error: updateError } = await admin
       .from('chapters')
       .update({
-        explanation: k2.slice(0, 24_000),
-        explanation_detailed: staged.staged ? k2.slice(0, 36_000) : null,
+        explanation: k2.slice(0, 36_000),
+        explanation_detailed: null,
         key_concepts: keyConcepts.length ? keyConcepts : null,
         page_sources: pageSources,
         explanation_brief: null,

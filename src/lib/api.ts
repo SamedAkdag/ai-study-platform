@@ -58,6 +58,72 @@ export type TopicStudyStageInfo = {
   unitTotal?: number
 }
 
+export type TopicClarifyQuestion = {
+  id: string
+  prompt: string
+  why: string
+  options: Array<{ id: string; label: string }>
+}
+
+export type TopicLockAnswer = {
+  id: string
+  question: string
+  answer: string
+  optionId: string
+}
+
+/** AI lock-in questions before generation (no book required). */
+export async function fetchTopicClarifyQuestions(input: {
+  goal: string
+  level?: string
+  depth?: 'one' | 'path'
+  minutes?: number
+  purpose?: 'exam' | 'understand' | 'homework' | 'review'
+  subject?: string | null
+}): Promise<TopicClarifyQuestion[]> {
+  const { data, error } = await supabase.functions.invoke('create-topic-study', {
+    body: {
+      stage: 'clarify',
+      goal: input.goal,
+      level: input.level || 'genel',
+      depth: input.depth || 'one',
+      minutes: input.minutes ?? 30,
+      purpose: input.purpose || 'understand',
+      subject: input.subject || undefined,
+    },
+  })
+  if (error) {
+    const detail = await extractFunctionsError(error, data)
+    throw new Error(detail)
+  }
+  if (data?.error) throw new Error(String(data.error))
+  const raw = Array.isArray(data?.questions) ? data.questions : []
+  return raw
+    .map((q: Record<string, unknown>) => {
+      const options = Array.isArray(q.options)
+        ? q.options
+            .map((o) => {
+              const oo = o as Record<string, unknown>
+              return {
+                id: String(oo.id || ''),
+                label: String(oo.label || ''),
+              }
+            })
+            .filter((o) => o.id && o.label)
+        : []
+      return {
+        id: String(q.id || ''),
+        prompt: String(q.prompt || ''),
+        why: String(q.why || ''),
+        options,
+      }
+    })
+    .filter(
+      (q: TopicClarifyQuestion) =>
+        q.id && q.prompt && q.options.length >= 2,
+    )
+}
+
 /**
  * Topic pipeline — client drains one process_next per Edge invoke.
  * Do not rely on waitUntil(fetch): that keeps the parent isolate alive
@@ -71,6 +137,7 @@ export async function createTopicStudy(input: {
   minutes?: number
   purpose?: 'exam' | 'understand' | 'homework' | 'review'
   subject?: string | null
+  locks?: TopicLockAnswer[]
   onStage?: (info: TopicStudyStageInfo) => void
 }) {
   const base = {
@@ -81,6 +148,7 @@ export async function createTopicStudy(input: {
     minutes: input.minutes ?? 30,
     purpose: input.purpose || 'understand',
     subject: input.subject || undefined,
+    locks: input.locks?.length ? input.locks : undefined,
   }
 
   const fail = (msg: string) => {
@@ -1180,8 +1248,8 @@ type BundleArtifactResult = {
 
 /**
  * Hybrid Toplu üret:
- * 1) Edge warm phase: notes + detailed (same isolate → detailed Cache Hit, no 546)
- * 2) Client: brief → practice → mind_map (short invokes, should Cache Hit)
+ * 1) Edge warm: single Anlatım (detail = time budget in SOURCE)
+ * 2) Client: practice → mind_map
  */
 export async function generateChapterBundle(input: {
   id: string
@@ -1217,7 +1285,6 @@ export async function generateChapterBundle(input: {
   ]
 
   const remaining = (data?.remaining_kinds || [
-    'brief',
     'practice',
     'mind_map',
   ]) as ChapterArtifactKind[]

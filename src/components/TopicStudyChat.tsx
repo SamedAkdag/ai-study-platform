@@ -1,4 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import {
+  fetchTopicClarifyQuestions,
+  type TopicClarifyQuestion,
+  type TopicLockAnswer,
+} from '@/lib/api'
+import { friendlyAiError } from '@/lib/errors'
 
 export type TopicBrief = {
   goal: string
@@ -6,15 +12,17 @@ export type TopicBrief = {
   depth: 'one' | 'path'
   minutes: 15 | 30 | 45 | 60 | 90
   purpose: 'exam' | 'understand' | 'homework' | 'review'
+  locks?: TopicLockAnswer[]
 }
 
 type Props = {
   busy?: boolean
+  subject?: string | null
   onCancel: () => void
   onConfirm: (brief: TopicBrief) => void
 }
 
-type Step = 'goal' | 'level' | 'purpose' | 'time' | 'depth' | 'confirm'
+type Step = 'goal' | 'level' | 'purpose' | 'time' | 'depth' | 'clarify' | 'confirm'
 
 const LEVELS = [
   { id: 'ortaokul', label: 'Ortaokul' },
@@ -38,13 +46,26 @@ const TIMES: { id: TopicBrief['minutes']; label: string; sub: string }[] = [
   { id: 90, label: '90 dk', sub: 'Geniş yol' },
 ]
 
-const STEPS: Step[] = ['goal', 'level', 'purpose', 'time', 'depth', 'confirm']
+const STEPS: Step[] = [
+  'goal',
+  'level',
+  'purpose',
+  'time',
+  'depth',
+  'clarify',
+  'confirm',
+]
 
 /**
- * Study brief — goal → level → purpose → time → depth → confirm.
- * Feeds the agentic topic curriculum pipeline.
+ * Study brief — goal → … → AI clarify locks → confirm.
+ * Locks pin teaching angle before research/curriculum.
  */
-export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
+export default function TopicStudyChat({
+  busy,
+  subject,
+  onCancel,
+  onConfirm,
+}: Props) {
   const [step, setStep] = useState<Step>('goal')
   const [goal, setGoal] = useState('')
   const [level, setLevel] = useState('lise')
@@ -52,8 +73,79 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
   const [minutes, setMinutes] = useState<TopicBrief['minutes']>(30)
   const [depth, setDepth] = useState<'one' | 'path'>('one')
 
+  const [clarifyLoading, setClarifyLoading] = useState(false)
+  const [clarifyError, setClarifyError] = useState<string | null>(null)
+  const [questions, setQuestions] = useState<TopicClarifyQuestion[]>([])
+  const [clarifyTick, setClarifyTick] = useState(0)
+  const [qIndex, setQIndex] = useState(0)
+  const [answers, setAnswers] = useState<Record<string, TopicLockAnswer>>({})
+
   const goalOk = goal.trim().length >= 3
   const stepIdx = STEPS.indexOf(step)
+  const currentQ = questions[qIndex]
+  const allAnswered =
+    questions.length > 0 && questions.every((q) => answers[q.id])
+
+  useEffect(() => {
+    if (step !== 'clarify') return
+    let cancelled = false
+    ;(async () => {
+      setClarifyLoading(true)
+      setClarifyError(null)
+      setQuestions([])
+      try {
+        const qs = await fetchTopicClarifyQuestions({
+          goal: goal.trim(),
+          level,
+          depth,
+          minutes,
+          purpose,
+          subject: subject || null,
+        })
+        if (cancelled) return
+        setQuestions(qs)
+        setQIndex(0)
+      } catch (err) {
+        if (cancelled) return
+        setClarifyError(friendlyAiError(err))
+      } finally {
+        if (!cancelled) setClarifyLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload only on step/tick
+  }, [step, clarifyTick])
+
+  function pickOption(q: TopicClarifyQuestion, optionId: string, label: string) {
+    const next = {
+      ...answers,
+      [q.id]: {
+        id: q.id,
+        question: q.prompt,
+        answer: label,
+        optionId,
+      },
+    }
+    setAnswers(next)
+    if (qIndex < questions.length - 1) {
+      setQIndex(qIndex + 1)
+    } else {
+      setStep('confirm')
+    }
+  }
+
+  function buildBrief(): TopicBrief {
+    return {
+      goal: goal.trim(),
+      level,
+      depth,
+      minutes,
+      purpose,
+      locks: questions.map((q) => answers[q.id]).filter(Boolean),
+    }
+  }
 
   return (
     <section className="topic-chat" aria-label="Konudan çalış">
@@ -61,8 +153,8 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
         <p className="topic-chat__eyebrow">PDF yok · çalışma brief’i</p>
         <h2 className="topic-chat__title">Ne öğrenmek istiyorsun?</h2>
         <p className="topic-chat__lead">
-          Süre ve amacını söyle. Studium senin yerinize birden fazla uzman
-          prompt’u çalıştırır: sözleşme → araştırma → zamanlı plan → kaynak.
+          Verdiğin konu merkezde kalır. Süre ve amaca göre birkaç kısa soruyla
+          anlatım açısını kilitleriz; sonra kaynak üretilir.
         </p>
       </header>
 
@@ -94,6 +186,9 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
           />
+          <p className="topic-chat__hint muted text-sm">
+            Bu metin tek merkezdir — bağlantılı konulara yayılmayız.
+          </p>
           <div className="topic-chat__actions">
             <button type="button" className="btn-ghost" onClick={onCancel}>
               Vazgeç
@@ -278,10 +373,112 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
               type="button"
               className="btn-primary"
               disabled={busy}
-              onClick={() => setStep('confirm')}
+              onClick={() => {
+                setAnswers({})
+                setQIndex(0)
+                setClarifyError(null)
+                setClarifyTick((n) => n + 1)
+                setStep('clarify')
+              }}
             >
-              Devam
+              Netleştir
             </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === 'clarify' ? (
+        <div className="topic-chat__panel">
+          <p className="topic-chat__label">
+            Anlatımı kilitle
+            {questions.length
+              ? ` · ${Math.min(qIndex + 1, questions.length)}/${questions.length}`
+              : ''}
+          </p>
+          <p className="topic-chat__hint muted text-sm">
+            Merkez: <strong>{goal.trim()}</strong>
+          </p>
+
+          {clarifyLoading ? (
+            <p className="topic-chat__hint">Konuya özel sorular hazırlanıyor…</p>
+          ) : null}
+
+          {clarifyError ? (
+            <div className="topic-chat__choices">
+              <p className="topic-chat__hint" role="alert">
+                {clarifyError}
+              </p>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy}
+                onClick={() => setClarifyTick((n) => n + 1)}
+              >
+                Tekrar dene
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={busy}
+                onClick={() => setStep('confirm')}
+              >
+                Soruları atla
+              </button>
+            </div>
+          ) : null}
+
+          {!clarifyLoading && !clarifyError && currentQ ? (
+            <div className="topic-chat__choices">
+              <p className="topic-chat__clarify-q">
+                <strong>{currentQ.prompt}</strong>
+                {currentQ.why ? <span>{currentQ.why}</span> : null}
+              </p>
+              {currentQ.options.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className={
+                    'topic-chat__choice' +
+                    (answers[currentQ.id]?.optionId === opt.id ? ' is-on' : '')
+                  }
+                  disabled={busy}
+                  onClick={() => pickOption(currentQ, opt.id, opt.label)}
+                >
+                  <strong>{opt.label}</strong>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {!clarifyLoading &&
+          !clarifyError &&
+          !currentQ &&
+          questions.length === 0 ? (
+            <p className="topic-chat__hint">Soru gelmedi — özetle devam edebilirsin.</p>
+          ) : null}
+
+          <div className="topic-chat__actions">
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={busy || clarifyLoading}
+              onClick={() => {
+                if (qIndex > 0) setQIndex(qIndex - 1)
+                else setStep('depth')
+              }}
+            >
+              Geri
+            </button>
+            {!clarifyLoading && (allAnswered || questions.length === 0) ? (
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy}
+                onClick={() => setStep('confirm')}
+              >
+                Özet
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -291,7 +488,7 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
           <p className="topic-chat__label">Brief özeti</p>
           <div className="topic-chat__summary">
             <p>
-              <span>Hedef</span>
+              <span>Merkez</span>
               {goal.trim()}
             </p>
             <p>
@@ -310,17 +507,24 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
               <span>Yapı</span>
               {depth === 'path' ? 'Öğrenme yolu' : 'Tek ünite'}
             </p>
+            {Object.values(answers).map((a) => (
+              <p key={a.id}>
+                <span>{a.question}</span>
+                {a.answer}
+              </p>
+            ))}
           </div>
           <p className="topic-chat__note muted text-sm">
-            90 dk gibi uzun sürelerde dakika dakika müfredat + ince detay üretilir;
-            kısa sürede daha sıkı sprint. Anlatım / Alıştır bu kaynağa dayanır.
+            Üretim bu merkeze ve kilitlere bağlı kalır; yan konulara yayılmaz.
           </p>
           <div className="topic-chat__actions">
             <button
               type="button"
               className="btn-ghost"
               disabled={busy}
-              onClick={() => setStep('depth')}
+              onClick={() =>
+                setStep(questions.length ? 'clarify' : 'depth')
+              }
             >
               Geri
             </button>
@@ -328,15 +532,7 @@ export default function TopicStudyChat({ busy, onCancel, onConfirm }: Props) {
               type="button"
               className="btn-primary"
               disabled={busy || !goalOk}
-              onClick={() =>
-                onConfirm({
-                  goal: goal.trim(),
-                  level,
-                  depth,
-                  minutes,
-                  purpose,
-                })
-              }
+              onClick={() => onConfirm(buildBrief())}
             >
               {busy ? 'Müfredat kuruluyor…' : 'Çalışma yolunu kur'}
             </button>

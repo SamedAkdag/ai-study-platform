@@ -78,6 +78,7 @@ import {
 
 /** Source-first study IA: PDF work surface, then AI notes, then drills. */
 type StudyMode = 'read' | 'practice' | 'source'
+/** @deprecated Depth chips removed — time budget owns detail. Kept for TTS/export props. */
 type Depth = 'brief' | 'standard' | 'detailed'
 type PracticePanel = 'hub' | 'flash' | 'quiz' | 'examples'
 
@@ -92,7 +93,7 @@ export default function ChapterPage() {
       return 'read'
     return 'source'
   })
-  const [depth, setDepth] = useState<Depth>('standard')
+  const depth: Depth = 'standard'
   const [practicePanel, setPracticePanel] = useState<PracticePanel>(() => {
     const p = searchParams.get('panel')
     if (p === 'flash' || p === 'quiz' || p === 'examples') return p
@@ -390,23 +391,9 @@ export default function ChapterPage() {
 
   const markdownForDepth = useMemo(() => {
     if (!ch) return ''
-    if (depth === 'brief') return ch.explanation_brief || ch.explanation || ''
-    if (depth === 'detailed') {
-      return ch.explanation_detailed || ch.explanation || ''
-    }
+    // Single Anlatım: süre/brief yoğunluğu belirler — ayrı Genel/Detay yok
     return ch.explanation || ''
-  }, [ch, depth])
-
-  const depthExactMissing =
-    depth === 'brief'
-      ? !String(ch?.explanation_brief || '').trim()
-      : depth === 'detailed'
-        ? !String(ch?.explanation_detailed || '').trim()
-        : false
-  const depthShowingFallback =
-    depthExactMissing && Boolean(String(ch?.explanation || '').trim())
-  const depthArtifactKind: ChapterArtifactKind | null =
-    depth === 'brief' ? 'brief' : depth === 'detailed' ? 'detailed' : null
+  }, [ch])
 
   const hasAiMindMap = Boolean(ch?.mind_map?.branches?.length)
   const mindMap = useMemo(() => {
@@ -419,14 +406,13 @@ export default function ChapterPage() {
     ? artifactMutation.variables?.kind
     : undefined
 
-  // On-demand: depths / practice / mind map — DB-cached after first click
+  // On-demand: practice / mind map — DB-cached after first click
   useEffect(() => {
     artifactTried.current = {}
     setArtifactError(null)
   }, [chapterId])
 
   useEffect(() => {
-    // Skip while Toplu üret owns the artifact sequence (avoids double brief miss).
     if (
       !ready ||
       !ch?.id ||
@@ -444,12 +430,6 @@ export default function ChapterPage() {
       artifactMutation.mutate({ kind })
     }
 
-    if (mode === 'read' && depth === 'brief') {
-      tryKind('brief', !String(ch.explanation_brief || '').trim())
-    }
-    if (mode === 'read' && depth === 'detailed') {
-      tryKind('detailed', !String(ch.explanation_detailed || '').trim())
-    }
     if (mode === 'practice') {
       const hasPractice =
         (ch.quiz?.length ?? 0) +
@@ -468,14 +448,11 @@ export default function ChapterPage() {
   }, [
     ready,
     ch?.id,
-    ch?.explanation_brief,
-    ch?.explanation_detailed,
     ch?.quiz,
     ch?.examples,
     ch?.flashcards,
     ch?.mind_map,
     mode,
-    depth,
     readStudio,
     bundleMutation.isPending,
     artifactMutation.isPending,
@@ -515,11 +492,6 @@ export default function ChapterPage() {
       ch.status === 'failed' ||
       (!ch.explanation && ch.status !== 'generating'))
 
-  const depths: { id: Depth; label: string }[] = [
-    { id: 'brief', label: 'Özet' },
-    { id: 'standard', label: 'Genel' },
-    { id: 'detailed', label: 'Detay' },
-  ]
 
   const modes: { id: StudyMode; label: string }[] = [
     { id: 'source', label: 'PDF' },
@@ -650,9 +622,6 @@ export default function ChapterPage() {
     }
   }
 
-  const depthLabel =
-    depth === 'brief' ? 'Kısa' : depth === 'detailed' ? 'Detaylı' : 'Standart'
-
   const readBody =
     ready && ch ? (
       <div className="chapter-read">
@@ -696,11 +665,7 @@ export default function ChapterPage() {
                 data={mindMap}
                 title={ch.title}
                 chapterId={ch.id}
-                markdown={
-                  ch.explanation_detailed ||
-                  markdownForDepth ||
-                  ch.explanation
-                }
+                markdown={markdownForDepth || ch.explanation || ''}
                 pageSources={ch.page_sources}
                 pageText={ch.page_text}
                 startPage={ch.start_page}
@@ -777,50 +742,14 @@ export default function ChapterPage() {
 
         {readStudio === 'prose' ? (
           <section className="chapter-prose">
-            {depthShowingFallback && depthArtifactKind ? (
-              <div className="artifact-draft-banner mb-4" role="status">
-                <div>
-                  <p className="artifact-draft-banner__title">
-                    {depth === 'brief'
-                      ? 'Kısa seviye henüz yok'
-                      : 'Detaylı seviye henüz yok'}
-                  </p>
-                  <p className="artifact-draft-banner__lead">
-                    Şimdilik standart anlatım gösteriliyor. Bu derinliği özel
-                    olarak üretebilirsin.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="btn-primary text-xs"
-                  disabled={artifactBusyKind === depthArtifactKind}
-                  onClick={() => {
-                    setArtifactError(null)
-                    artifactTried.current[`${ch.id}:${depthArtifactKind}`] = ''
-                    artifactMutation.mutate({
-                      kind: depthArtifactKind,
-                      force: true,
-                    })
-                  }}
-                >
-                  {artifactBusyKind === depthArtifactKind
-                    ? 'Üretiliyor…'
-                    : depth === 'brief'
-                      ? 'Kısa anlatımı üret'
-                      : 'Detaylı anlatımı üret'}
-                </button>
-              </div>
-            ) : null}
             {!markdownForDepth ? (
               <div className="listen-workspace-empty" role="status">
                 <p className="section-label mb-0">Anlatım</p>
                 <h2 className="listen-workspace-empty__title">
-                  Bu seviye henüz yok
+                  Anlatım henüz yok
                 </h2>
                 <p className="listen-workspace-empty__lead">
-                  {depthArtifactKind
-                    ? 'Seçili derinliği üret, sonra buradan oku.'
-                    : 'Önce standart anlatımı üret.'}
+                  Yoğunluk ayırdığın süreye göre üretilir — tek anlatım.
                 </p>
                 {artifactError ? (
                   <p className="alert-error text-sm" role="alert">
@@ -832,41 +761,20 @@ export default function ChapterPage() {
                     {genError}
                   </p>
                 ) : null}
-                {depthArtifactKind ? (
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    disabled={artifactBusyKind === depthArtifactKind}
-                    onClick={() => {
-                      setArtifactError(null)
-                      artifactTried.current[`${ch.id}:${depthArtifactKind}`] =
-                        ''
-                      artifactMutation.mutate({
-                        kind: depthArtifactKind,
-                        force: true,
-                      })
-                    }}
-                  >
-                    {artifactBusyKind === depthArtifactKind
-                      ? 'Üretiliyor…'
-                      : 'Bu seviyeyi üret'}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    disabled={generateMutation.isPending}
-                    onClick={() => {
-                      autoRetryRef.current = 0
-                      setGenError(null)
-                      generateMutation.mutate()
-                    }}
-                  >
-                    {generateMutation.isPending
-                      ? 'Üretiliyor…'
-                      : 'Standart anlatımı üret'}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={generateMutation.isPending}
+                  onClick={() => {
+                    autoRetryRef.current = 0
+                    setGenError(null)
+                    generateMutation.mutate()
+                  }}
+                >
+                  {generateMutation.isPending
+                    ? 'Üretiliyor…'
+                    : 'Anlatımı üret'}
+                </button>
               </div>
             ) : (
               <Suspense
@@ -1380,7 +1288,7 @@ export default function ChapterPage() {
                 downloadMarkdownFile(markdownForDepth, {
                   bookTitle: bookQuery.data?.title || 'Studium',
                   chapterTitle: ch.title,
-                  subtitle: `Anlatım · ${depthLabel}`,
+                  subtitle: 'Anlatım',
                 })
                 setCiteToast('Anlatım indirildi (.md)')
                 window.setTimeout(() => setCiteToast(null), 2200)
@@ -1613,30 +1521,6 @@ export default function ChapterPage() {
                   ))}
               </div>
 
-              {mode === 'read' &&
-              ready &&
-              readStudio === 'prose' ? (
-                <div
-                  className="mode-segment mode-segment--secondary"
-                  role="tablist"
-                  aria-label="Anlatım derinliği"
-                >
-                  {depths.map((d) => (
-                    <button
-                      key={d.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={depth === d.id}
-                      className={`chip ${
-                        depth === d.id ? 'chip-active' : 'chip-idle'
-                      }`}
-                      onClick={() => setDepth(d.id)}
-                    >
-                      {d.label}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
             </div>
           )}
         </div>
@@ -1783,13 +1667,9 @@ export default function ChapterPage() {
             }
             size="banner"
             title={
-              artifactBusyKind === 'brief'
-                ? 'Kısa özet hazırlanıyor'
-                : artifactBusyKind === 'detailed'
-                  ? 'Detaylı anlatım hazırlanıyor'
-                  : artifactBusyKind === 'practice'
-                    ? 'Alıştır hazırlanıyor'
-                    : 'Zihin haritası hazırlanıyor'
+              artifactBusyKind === 'practice'
+                ? 'Alıştır hazırlanıyor'
+                : 'Zihin haritası hazırlanıyor'
             }
             detail={
               artifactBusyKind === 'practice'
@@ -1814,11 +1694,7 @@ export default function ChapterPage() {
                   ? 'practice'
                   : readStudio === 'map' || readStudio === 'audio'
                     ? 'mind_map'
-                    : depth === 'brief'
-                      ? 'brief'
-                      : depth === 'detailed'
-                        ? 'detailed'
-                        : null
+                    : null
               if (!kind || !ch) return
               artifactTried.current[`${ch.id}:${kind}`] = ''
               artifactMutation.mutate({ kind, force: true })
